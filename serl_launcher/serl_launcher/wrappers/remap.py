@@ -1,3 +1,11 @@
+'''
+Author: Haotian Liang haotianliang10@gmail.com
+Date: 2025-08-04 09:58:54
+LastEditors: Haotian Liang haotianliang10@gmail.com
+LastEditTime: 2025-08-04 10:01:16
+FilePath: /code/hil-serl/serl_launcher/serl_launcher/wrappers/remap.py
+Description: 这是默认设置,请设置`customMade`, 打开koroFileHeader查看配置 进行设置: https://github.com/OBKoro1/koro1FileHeader/wiki/%E9%85%8D%E7%BD%AE
+'''
 from typing import Any
 
 import gymnasium as gym
@@ -31,4 +39,4 @@ class RemapWrapper(gym.ObservationWrapper):
             raise TypeError(f"Unsupported type {type(new_structure)}")
 
     def observation(self, observation):
-        return jax.tree_map(lambda x: observation[x], self.new_structure)
+        return jax.tree.map(lambda x: observation[x], self.new_structure)

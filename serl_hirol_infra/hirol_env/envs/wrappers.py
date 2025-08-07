@@ -4,10 +4,10 @@ import gymnasium as gym
 import numpy as np
 from gymnasium.spaces import Box
 import copy
-from franka_env.spacemouse.spacemouse_expert import SpaceMouseExpert
+from hirol_env.spacemouse.spacemouse_expert import SpaceMouseExpert
 # import requests
 from scipy.spatial.transform import Rotation as R
-from franka_env.envs.franka_env import FrankaEnv
+from hirol_env.envs.hirol_env import HIROLEnv
 from typing import List
 
 sigmoid = lambda x: 1 / (1 + np.exp(-x))
@@ -215,6 +215,7 @@ class SpacemouseIntervention(gym.ActionWrapper):
         self.expert = SpaceMouseExpert()
         self.left, self.right = False, False
         self.action_indices = action_indices
+        self.gripper_state = 0.0  # Keep track of gripper state
 
     def action(self, action: np.ndarray) -> np.ndarray:
         """
@@ -232,13 +233,14 @@ class SpacemouseIntervention(gym.ActionWrapper):
 
         if self.gripper_enabled:
             if self.left:  # close gripper
-                gripper_action = np.random.uniform(-1, -0.9, size=(1,))
+                self.gripper_state = -1.0
                 intervened = True
             elif self.right:  # open gripper
-                gripper_action = np.random.uniform(0.9, 1, size=(1,))
+                self.gripper_state = 1.0
                 intervened = True
-            else:
-                gripper_action = np.zeros((1,))
+            
+            # Always use the current gripper state
+            gripper_action = np.array([self.gripper_state])
             expert_a = np.concatenate((expert_a, gripper_action), axis=0)
 
         if self.action_indices is not None:
@@ -261,6 +263,18 @@ class SpacemouseIntervention(gym.ActionWrapper):
         info["left"] = self.left
         info["right"] = self.right
         return obs, rew, done, truncated, info
+    
+    def reset(self, **kwargs):
+        self.gripper_state = 0.0  # Reset gripper state
+        return self.env.reset(**kwargs)
+    
+    def close(self):
+        """Close the SpaceMouse expert when environment closes"""
+        if hasattr(self.expert, 'close'):
+            self.expert.close()
+        # Call parent's close if it exists
+        if hasattr(self.env, 'close'):
+            self.env.close()
 
 class DualSpacemouseIntervention(gym.ActionWrapper):
     def __init__(self, env, action_indices=None, gripper_enabled=True):

@@ -1,0 +1,104 @@
+# Test configuration for HIROL interface - uses simulation instead of hardware
+# This configuration sets up the Fr3 robot with Franka hand gripper in simulation
+
+# Platform settings
+use_hardware: false  # Changed to false for testing
+use_simulation: true  # Changed to true for testing
+
+# Robot configuration
+robot: "fr3"
+robot_config:
+  fr3:
+    ip: "192.168.3.102"  # Not used in simulation
+    damping: [0.1, 0.1, 0.1, 0.1, 0.1, 0.1, 0.1]
+    stiffness: [600.0, 600.0, 600.0, 600.0, 250.0, 150.0, 50.0]
+    filter_coeff: 0.005
+    collision_behaviour:
+      torque_min: [20.0, 20.0, 18.0, 18.0, 16.0, 14.0, 12.0]  # Nm
+      torque_max: [30.0, 30.0, 28.0, 28.0, 26.0, 24.0, 22.0]  # Nm
+      force_min: [20.0, 20.0, 20.0, 10.0, 10.0, 10.0]  # N
+      force_max: [30.0, 30.0, 30.0, 25.0, 25.0, 25.0]  # N
+
+# Gripper configuration
+gripper: "franka_hand"
+gripper_config:
+  franka_hand:
+    ip: "192.168.3.102"  # Not used in simulation
+    grasp_force: 30.0
+    grasp_speed: 0.1
+
+# Control settings
+control_frequency: 800
+controller_type: "ik"  # Added missing field
+model_type: "model"    # Added missing field
+
+# Buffer configuration (required when use_trajectory_planner is true)
+buffer_type: "buffer"  # Added missing field
+
+# Controller configuration
+controller_config:
+  ik:
+    frame_name: "fr3_hand_tcp"
+    ik_type: "lm"  # Solver type: gaussian_newtown, dls, or lm
+    tolerance: 0.000001
+    max_iteration: 500  # Note: max_iteration not max_iter
+    damping: 0.01
+    damping_weight: 0.3  # Damping weight for IK solver
+
+# Model configuration
+model_config:
+  name: "fr3_franka_hand"
+  cfg:
+    fr3_franka_hand: 
+      urdf_path: "assets/franka_fr3/fr3_franka_hand.urdf"
+      mesh_offset: "assets/franka_fr3"
+      frames: ["base", "fr3_link0", "fr3_link1", "fr3_link2", "fr3_link3", "fr3_link4", 
+              "fr3_link5", "fr3_link6", "fr3_link7", "fr3_link8", "fr3_hand_tcp",
+              "fr3_hand", "fr3_leftfinger", "fr3_rightfinger"]
+      base_link: "base"
+      ee_link: "fr3_hand_tcp"
+      fixed_base: true
+      lock_joints:
+        - base: "fr3_hand"
+          end: "fr3_leftfinger"
+        - base: "fr3_hand"
+          end: "fr3_rightfinger"
+
+# Trajectory planner configuration
+use_trajectory_planner: true
+trajectory_planner_type: "cart_polynomial"
+plan_type: "cartesian"
+traj_frequency: 450
+
+trajectory_config:
+  cart_polynomial:
+    interpolation_type: "quintic"
+    dt: 0.02
+    max_velocity: 0.1
+    enable_motion: false
+  buffer:
+    size: 60
+    dim: 7 
+
+# Simulation configuration
+simulation: "mujoco"
+simulation_config:
+  mujoco:
+    # File paths relative to HIROLRobotPlatform folder
+    base_xml_file: "simulation/fr3_mujoco/peg-in-hole/scene/peg_in_hole.xml"
+    robot_xml: "simulation/fr3_mujoco/peg-in-hole/scene/fr3.xml"
+    quat_sequence: "xyzw"
+    dt: 0.002
+    dof: [7]
+    joint_names: ["fr3_joint1", "fr3_joint2", "fr3_joint3", "fr3_joint4", 
+                  "fr3_joint5", "fr3_joint6", "fr3_joint7"]
+    actuator_names: ["fr3_actuator1", "fr3_actuator2", "fr3_actuator3", "fr3_actuator4", 
+                     "fr3_actuator5", "fr3_actuator6", "fr3_actuator7"]
+    actuator_mode: ["position", "position", "position", "position", "position", "position", "position"]
+    ee_site_name: "fr3_ee_attachment"
+    base_body: "base"
+    extra_render: false  # Disable for testing
+    max_traj_len: 1000
+    use_custom_key_frame: false
+    use_visualizer: false  # Disable visualizer for headless testing
+    realtime: true
