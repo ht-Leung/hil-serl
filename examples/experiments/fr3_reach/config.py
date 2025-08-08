@@ -39,10 +39,10 @@ class EnvConfig(DefaultEnvConfig):
     }
     
     # Target pose for reaching (x, y, z, roll, pitch, yaw)
-    TARGET_POSE = np.array([0.5, 0.0, 0.3, -np.pi, 0, 0])
+    # TARGET_POSE = np.array([0.1, 0.0, 0.3, -np.pi, 0, 0])
     
     # Reset pose - slightly offset from target
-    RESET_POSE = np.array([0.4, 0.0, 0.2, -np.pi, 0, 0])
+    RESET_POSE = np.array([0.5, 0.0, 0.3, -np.pi, 0, 0])
     
     # Reward threshold - 2cm for position, 0.1 rad for orientation
     REWARD_THRESHOLD = np.array([0.02, 0.02, 0.02, 0.1, 0.1, 0.1])
@@ -50,21 +50,29 @@ class EnvConfig(DefaultEnvConfig):
     # Action scale: [position_scale, rotation_scale, gripper_scale]
     # Optimized for SpaceMouse control (max output ~0.26 after scaling by 350)
     # Position: 0.26 * 0.02 = 5.2mm per frame, at 10Hz = 52mm/s max velocity
-    ACTION_SCALE = np.array([0.01, 0.02, 1])  # Slightly increased for responsiveness
+    ACTION_SCALE = np.array([0.01, 0.00, 1])  # Slightly increased for responsiveness
     
+    # Critical Damped Tracker parameters (二阶临界阻尼跟踪器)
+    # Natural frequency (rad/s) - controls tracking responsiveness
+    # Lower values (15-20): More compliant, slower response
+    # Medium values (20-30): Balanced (default 25)
+    # Higher values (30-40): Faster response, stiffer
+    # Formula: settling_time ≈ 4.6 / omega_n
+    TRACKER_OMEGA_N = 25.0  # Default: 0.18s settling time
+      
     # Enable random reset for diversity
     RANDOM_RESET = False
     RANDOM_XY_RANGE = 0.05
     RANDOM_RZ_RANGE = 0.1
     
     # Workspace limits
-    ABS_POSE_LIMIT_HIGH = np.array([0.7, 0.3, 0.4, np.pi+0.5, 0.5, 0.5])
-    ABS_POSE_LIMIT_LOW = np.array([0.3, -0.3, 0.0, np.pi-0.5, -0.5, -0.5])
+    ABS_POSE_LIMIT_HIGH = np.array([0.7, 0.3, 0.45, np.pi+0.5, 0.5, 0.5])
+    ABS_POSE_LIMIT_LOW = np.array([0.3, -0.3, 0.2, np.pi-0.5, -0.5, -0.5])
     
     # Display
     DISPLAY_IMAGE = True
-    GRIPPER_SLEEP = 0.6
-    MAX_EPISODE_LENGTH = 100
+    GRIPPER_SLEEP = 0.1
+    MAX_EPISODE_LENGTH = 200
     # JOINT_RESET_PERIOD = 100  # Reset joints every 20 episodes
 
 
@@ -73,7 +81,7 @@ class TrainConfig(DefaultTrainingConfig):
     
     # Image and proprioception keys
     image_keys = ["side", "wrist_1"]
-    classifier_keys = ["side"]
+    classifier_keys = ["side", "wrist_1"]  # Use both cameras for classifier
     proprio_keys = ["tcp_pose", "tcp_vel", "tcp_force", "tcp_torque", "gripper_pose"]
     
     # Training parameters
@@ -85,7 +93,7 @@ class TrainConfig(DefaultTrainingConfig):
     encoder_type = "resnet-pretrained"
     setup_mode = "single-arm-learned-gripper"
     
-    def get_environment(self, fake_env=False, save_video=False, classifier=False):
+    def get_environment(self, fake_env=False, save_video=False, classifier=True):
         """Create and configure the FR3 reach environment"""
         
         # Create base environment

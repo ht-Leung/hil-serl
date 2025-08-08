@@ -212,6 +212,11 @@ class FR3Env(gym.Env):
         if not fake_env:
             # Initialize FrankaInterface (it uses default config which has the correct IP)
             self.robot = FrankaInterface()
+            
+            # Set tracker frequency from config if available
+            if hasattr(self.config, 'TRACKER_OMEGA_N'):
+                self.robot.set_tracker_frequency(self.config.TRACKER_OMEGA_N)
+            
             self._update_currpos()
             
             # Initialize cameras
@@ -385,21 +390,20 @@ class FR3Env(gym.Env):
         implemented each subclass for the specific task.
         Should override this method if custom reset procedure is needed.
         """
-        # Change to precision mode for reset
-        self._update_currpos()
-        self._send_pos_command(self.currpos)
-        time.sleep(0.3)
+        # Pause tracker before reset operations
+        if self.robot is not None and hasattr(self.robot, 'pause_tracker'):
+            self.robot.pause_tracker()
         
         # Update compliance parameters to precision mode
         if self.robot is not None:
             self.robot.update_params(self.config.PRECISION_PARAM)
-        time.sleep(0.5)
+        time.sleep(0.1)
         
-        # Perform joint reset if needed
+        # Perform joint reset if needed (tracker is already paused)
         if joint_reset:
             print("JOINT RESET - Moving to home position")
             if self.robot is not None:
-                self.robot.joint_reset()
+                self.robot.joint_reset()  # This now properly handles tracker pause/resume
             time.sleep(0.5)
         
         # Prepare reset pose
@@ -417,11 +421,19 @@ class FR3Env(gym.Env):
             reset_pose = self.resetpos.copy()
         
         # Move to reset position using smooth trajectory
-        self.interpolate_move(reset_pose, timeout=1.0)
+        # send_pos_trajectory_command now properly handles tracker pause/resume
+        if self.robot is not None and hasattr(self.robot, 'send_pos_trajectory_command'):
+            self.robot.send_pos_trajectory_command(reset_pose, finish_time=1.0)
+        else:
+            self.interpolate_move(reset_pose, timeout=1.0)
         
         # Change back to compliance mode
         if self.robot is not None:
             self.robot.update_params(self.config.COMPLIANCE_PARAM)
+        
+        # Resume tracker with sync to current position
+        if self.robot is not None and hasattr(self.robot, 'resume_tracker'):
+            self.robot.resume_tracker(sync_to_current=True)
 
     def reset(self, joint_reset: bool = False, **kwargs) -> Tuple[Dict, Dict]:
         """Reset the environment"""
@@ -440,10 +452,10 @@ class FR3Env(gym.Env):
             joint_reset = True
 
         self._recover()
+        self.robot.open_gripper()
         self.go_to_reset(joint_reset=joint_reset)
         self._recover()
         self.curr_path_length = 0
-        self.robot.open_gripper()
 
         self._update_currpos()
         

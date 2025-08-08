@@ -10,6 +10,7 @@ from typing import Dict, Any, Optional
 from pathlib import Path
 import logging
 import time
+import threading
 
 # Add HIROLRobotPlatform to path
 platform_path = Path(__file__).parent.parent.parent.parent / "HIROLRobotPlatform"
@@ -44,10 +45,27 @@ class FrankaInterface(RobotInterface):
         self._compliance_params = None
         self._load_params = None
         
+        # 二阶临界阻尼跟踪器参数 (Critical Damped Tracker)
+        self._tracker_thread = None
+        self._tracker_running = False
+        self._tracker_lock = threading.Lock()  # 线程同步锁
+        self._pause_tracker = False  # 暂停标志，用于reset等场景
+        self._target_joints = None  # 目标关节角度
+        self._current_joints = None  # 当前插值的关节角度
+        self._joint_velocity = None  # 关节速度
+        
+        # 二阶系统参数
+        self._omega_n = 25.0  # 自然频率 (rad/s) - 可调参数，越大跟踪越紧但越硬
+        # 经验值: 15-35 rad/s，对应安定时间 t_s = 4.6/omega_n
+        # omega_n=25 -> t_s≈0.18s (95%到达)
+        
         # 获取机器人模型用于计算雅可比
         self._robot_model = self._robot._robot_model
         
-        logger.info("FrankaInterface initialized")
+        # 启动常驻插补线程
+        self._start_tracker_thread()
+        
+        logger.info("FrankaInterface initialized with critical damped tracker")
     
     def get_state(self) -> RobotState:
         """
@@ -95,7 +113,7 @@ class FrankaInterface(RobotInterface):
     
     def send_pos_command(self, pose: np.ndarray) -> None:
         """
-        发送位置控制命令（使用改进的增量控制）
+        发送位置控制命令（使用高频插值平滑控制）
         
         参数:
             pose: np.ndarray(7,) - 目标TCP位姿 [x,y,z,qx,qy,qz,qw]
@@ -107,22 +125,116 @@ class FrankaInterface(RobotInterface):
             qz=float(pose[5]), qw=float(pose[6])
         )
         
-        # 使用servo模式进行快速直接控制
-        # self._robot.move_to_pose(target_pose, mode="servo")
+        # Option 1: Use blocking servo mode with 100ms smooth trajectory (1000Hz internal)
+        # Uncomment this for smoother motion at the cost of blocking
+        # self._robot.move_to_pose(target_pose, mode="servo", duration=0.08)
         
-        # Use direct IK + joint command for immediate response
-        # This avoids the blocking execute_servo_motion
+        # Option 2: Direct IK command (current implementation - fast but may be jerky)
+        # success, joint_target = self._robot._motion_controller.compute_ik(target_pose)
+        # if success:
+        #     # Send single joint command without blocking loop
+        #     self._robot._fr3_arm.set_joint_command("position", joint_target)
+        # else:
+        #     logger.warning("IK failed for target pose")
+        
+        # Option 3: Use trajectory mode for smooth motion (五次多项式 速度是0 不太对)
+        # 计算目标关节角度
+        # success, joint_target = self._robot._motion_controller.compute_ik(target_pose)
+        # if not success:
+        #     logger.warning("IK failed for target pose")
+        #     return
+
+        # # 获取当前关节角度
+        # current_joints = self._robot.get_joint_positions()
+
+        # # 使用关节轨迹规划实现平滑运动（80ms内完成）
+        # config = TrajectoryConfig(finish_time=0.1)
+        # self._robot._motion_controller.execute_joint_trajectory(
+        #     current_joints,
+        #     joint_target,
+        #     config
+        # )
+        
+        
+        # Option 7: Critical Damped Second-Order Tracker (二阶临界阻尼跟踪器) - 默认实现
+        # 保持速度连续，避免启停，使用常驻线程实现平滑跟踪
+        
+        # Compute target joint angles
         success, joint_target = self._robot._motion_controller.compute_ik(target_pose)
-        if success:
-            # Send single joint command without blocking loop
-            self._robot._fr3_arm.set_joint_command("position", joint_target)
-        else:
+        if not success:
             logger.warning("IK failed for target pose")
+            return
+        
+        # 更新目标关节角度（线程会自动跟踪）
+        self._target_joints = joint_target
+        
+    
+    def pause_tracker(self) -> None:
+        """暂停跟踪器线程（线程安全）"""
+        with self._tracker_lock:
+            self._pause_tracker = True
+        time.sleep(0.002)  # 等待当前控制周期结束 (>1/800s)
+        logger.debug("Tracker paused")
+    
+    def resume_tracker(self, sync_to_current: bool = True) -> None:
+        """恢复跟踪器线程（线程安全）
+        
+        参数:
+            sync_to_current: 是否同步跟踪器状态到当前关节位置
+        """
+        if sync_to_current:
+            # 获取当前实际关节位置
+            current_joints = self._robot.get_joint_positions()
+            with self._tracker_lock:
+                # 同步跟踪器状态，避免跳变
+                self._current_joints = current_joints.copy()
+                self._target_joints = current_joints.copy()
+                self._joint_velocity = np.zeros(7)
+                self._pause_tracker = False
+        else:
+            with self._tracker_lock:
+                self._pause_tracker = False
+        logger.debug("Tracker resumed")
+    
+    def send_pos_command_direct(self, pose: np.ndarray) -> None:
+        """
+        直接发送位置命令，绕过跟踪器（用于reset等特殊场景）
+        
+        参数:
+            pose: np.ndarray(7,) - 目标TCP位姿 [x,y,z,qx,qy,qz,qw]
+        """
+        # 计算目标关节角度
+        target_pose = Pose(
+            x=float(pose[0]), y=float(pose[1]), z=float(pose[2]),
+            qx=float(pose[3]), qy=float(pose[4]), 
+            qz=float(pose[5]), qw=float(pose[6])
+        )
+        
+        success, joint_target = self._robot._motion_controller.compute_ik(target_pose)
+        if not success:
+            logger.warning("IK failed for target pose")
+            return
+        
+        # 暂停跟踪器
+        self.pause_tracker()
+        
+        # 直接发送命令
+        self._robot._fr3_arm.set_joint_command("position", joint_target)
+        
+        # 同步跟踪器状态到新位置
+        with self._tracker_lock:
+            self._current_joints = joint_target.copy()
+            self._target_joints = joint_target.copy()
+            self._joint_velocity = np.zeros(7)
+        
+        # 恢复跟踪器
+        self.resume_tracker(sync_to_current=False)  # 已经手动同步了，不需要再同步
     
     def send_pos_trajectory_command(self, pose: np.ndarray, 
                                    finish_time: float = 2.0) -> None:
         """
         发送位置轨迹命令（trajectory模式，平滑运动）
+        用于reset等需要精确到达的场景，绕过跟踪器
         
         参数:
             pose: np.ndarray(7,) - 目标TCP位姿 [x,y,z,qx,qy,qz,qw]
@@ -135,9 +247,18 @@ class FrankaInterface(RobotInterface):
             qz=float(pose[5]), qw=float(pose[6])
         )
         
+        # 暂停跟踪器，避免干扰
+        self.pause_tracker()
+        
         # 使用trajectory模式进行平滑运动
         config = TrajectoryConfig(finish_time=finish_time)
         self._robot.move_to_pose(target_pose, mode="trajectory", config=config)
+        
+        # 等待运动完成
+        time.sleep(finish_time + 0.1)
+        
+        # 恢复跟踪器，自动同步到当前位置
+        self.resume_tracker(sync_to_current=True)
     
     def send_gripper_command(self, position: float, mode: str = "binary") -> None:
         """
@@ -187,7 +308,14 @@ class FrankaInterface(RobotInterface):
     
     def joint_reset(self) -> None:
         """执行关节级别的重置，返回home位置"""
+        # 暂停跟踪器，避免干扰
+        self.pause_tracker()
+        
+        # 执行home运动
         self._robot.move_to_home()
+        
+        # 恢复跟踪器，同步到新位置
+        self.resume_tracker(sync_to_current=True)
         logger.info("Robot reset to home position")
     
     def clear_errors(self) -> None:
@@ -337,8 +465,9 @@ class FrankaInterface(RobotInterface):
     
     def __exit__(self, exc_type, exc_val, exc_tb):
         """上下文管理器出口"""
-        # 参数未使用，但这是Python上下文管理器协议要求的签名
-        _ = (exc_type, exc_val, exc_tb)
+        # 停止跟踪器线程
+        self.stop_tracker()
+        # 关闭机器人连接
         self._robot.close()
         return False
     
@@ -412,6 +541,99 @@ class FrankaInterface(RobotInterface):
             bool: 是否检测到接触
         """
         return self._robot.is_in_contact(force_threshold=threshold)
+    
+    def _start_tracker_thread(self) -> None:
+        """启动常驻的二阶跟踪器线程"""
+        # 初始化状态
+        self._current_joints = self._robot.get_joint_positions()
+        self._joint_velocity = np.zeros(7)
+        self._target_joints = self._current_joints.copy()
+        
+        # 创建并启动线程
+        self._tracker_running = True
+        self._tracker_thread = threading.Thread(target=self._tracker_loop)
+        self._tracker_thread.daemon = True
+        self._tracker_thread.start()
+        logger.info("Started critical damped tracker thread at 800Hz")
+    
+    def _tracker_loop(self) -> None:
+        """常驻线程的主循环 - 二阶临界阻尼跟踪器"""
+        control_freq = 800.0  # Hz
+        dt = 1.0 / control_freq
+        
+        # 临界阻尼 ζ = 1
+        zeta = 1.0
+        
+        while self._tracker_running:
+            loop_start = time.perf_counter()
+            
+            # 线程安全地检查暂停状态
+            with self._tracker_lock:
+                is_paused = self._pause_tracker
+                target_joints = self._target_joints
+                current_joints = self._current_joints
+                joint_velocity = self._joint_velocity
+            
+            # 如果暂停，跳过本次循环
+            if is_paused:
+                time.sleep(dt)
+                continue
+            
+            if target_joints is not None and current_joints is not None:
+                # 二阶系统动力学
+                # ẍ = ωn²(x_target - x) - 2ζωn·ẋ
+                error = target_joints - current_joints
+                acceleration = self._omega_n**2 * error - 2 * zeta * self._omega_n * joint_velocity
+                
+                # 欧拉积分
+                joint_velocity = joint_velocity + acceleration * dt
+                current_joints = current_joints + joint_velocity * dt
+                
+                # 更新内部状态（线程安全）
+                with self._tracker_lock:
+                    self._joint_velocity = joint_velocity
+                    self._current_joints = current_joints
+                
+                # 发送命令到机器人
+                try:
+                    self._robot._fr3_arm.set_joint_command("position", current_joints)
+                except Exception as e:
+                    logger.warning(f"Failed to send joint command: {e}")
+            
+            # 保持控制频率
+            loop_time = time.perf_counter() - loop_start
+            if loop_time < dt:
+                time.sleep(dt - loop_time)
+            elif loop_time > 2 * dt:
+                logger.warning(f"Tracker loop running slow: {loop_time*1000:.1f}ms")
+    
+    def stop_tracker(self) -> None:
+        """停止跟踪器线程"""
+        self._tracker_running = False
+        if self._tracker_thread and self._tracker_thread.is_alive():
+            self._tracker_thread.join(timeout=1.0)
+        logger.info("Stopped tracker thread")
+    
+    def set_tracker_frequency(self, omega_n: float) -> None:
+        """
+        设置跟踪器的自然频率
+        
+        参数:
+            omega_n: 自然频率 (rad/s)
+                    - 15-20: 柔顺，响应慢
+                    - 20-30: 平衡（默认25）
+                    - 30-40: 响应快，较硬
+        """
+        self._omega_n = np.clip(omega_n, 10.0, 50.0)
+        t_settle = 4.6 / self._omega_n
+        logger.info(f"Tracker frequency set to {omega_n:.1f} rad/s (95% settling time: {t_settle:.2f}s)")
+    
+    def __del__(self):
+        """清理资源"""
+        try:
+            self.stop_tracker()
+        except:
+            pass  # 避免在析构时抛出异常
 
 
 # === 测试代码 ===
