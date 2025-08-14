@@ -39,5 +39,5 @@ wandb/
 htmlcov/
 *.pkl
 demo_data/
-weights/
-first_run/
+examples/weights/
+examples/experiments/fr3_reach/first_runfirst_run/
