@@ -509,6 +509,11 @@ class FR3Env(gym.Env):
             
             # Small sleep to prevent CPU spinning
             time.sleep(0.01)
+            
+        _ = self.get_im()  # 丢弃这一帧
+        time.sleep(0.1)    # 给相机时间捕获新帧
+      # 现在获取真正的观察
+        obs = self._get_obs()
         
         return obs, {"succeed": False}
 

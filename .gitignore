@@ -12,6 +12,14 @@ build/
 # Experiment data and checkpoints
 classifier_ckpt/
 classifier_data/
+buffer/
+demo_buffer/
+**/buffer/
+**/demo_buffer/
+**/checkpoint_*/
+**/first_run/
+**/second_run/
+**/third_run/
 
 # Virtual environments
 venv/
@@ -40,4 +48,3 @@ htmlcov/
 *.pkl
 demo_data/
 examples/weights/
-examples/experiments/fr3_reach/first_run/
