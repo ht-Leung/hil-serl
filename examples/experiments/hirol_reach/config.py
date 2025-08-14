@@ -7,7 +7,8 @@ from serl_hirol_infra.hirol_env.envs.hirol_env import DefaultEnvConfig
 from serl_hirol_infra.hirol_env.envs.wrappers import (
     Quat2EulerWrapper,
     SpacemouseIntervention,
-    MultiCameraBinaryRewardClassifierWrapper,
+    # MultiCameraBinaryRewardClassifierWrapper
+    KeyboardRewardWrapper,
 )
 from serl_launcher.wrappers.serl_obs_wrappers import SERLObsWrapper
 from serl_launcher.wrappers.chunking import ChunkingWrapper

@@ -7,8 +7,10 @@ import copy
 from hirol_env.spacemouse.spacemouse_expert import SpaceMouseExpert
 # import requests
 from scipy.spatial.transform import Rotation as R
-from hirol_env.envs.hirol_env import HIROLEnv
+# from hirol_env.envs.hirol_env import HIROLEnv
 from typing import List
+import threading
+from pynput import keyboard
 
 sigmoid = lambda x: 1 / (1 + np.exp(-x))
 
@@ -98,6 +100,82 @@ class MultiStageBinaryRewardClassifierWrapper(gym.Wrapper):
         self.received = [False] * len(self.reward_classifier_func)
         info['succeed'] = False
         return obs, info
+
+
+class KeyboardRewardWrapper(gym.Wrapper):
+    """
+    Non-blocking keyboard reward wrapper.
+    Press 's' to give reward=1 and end the episode.
+    """
+    
+    def __init__(self, env: Env, target_hz=None):
+        super().__init__(env)
+        self.target_hz = target_hz
+        self.reward_flag = False
+        self.episode_rewarded = False  # Track if reward given this episode
+        self.lock = threading.Lock()
+        
+        # Start keyboard listener
+        self.listener = keyboard.Listener(on_press=self._on_press)
+        self.listener.start()
+        print("[KeyboardRewardWrapper] Press 's' to give reward=1 and end episode")
+    
+    def _on_press(self, key):
+        """Handle keyboard press events"""
+        try:
+            if hasattr(key, 'char') and key.char == 's':
+                with self.lock:
+                    if not self.episode_rewarded:  # Only trigger once per episode
+                        self.reward_flag = True
+                        self.episode_rewarded = True
+                        print("[Reward] Success! Episode will end.")
+        except AttributeError:
+            pass
+    
+    def compute_reward(self, obs):
+        """Return reward based on keyboard input"""
+        with self.lock:
+            if self.reward_flag:
+                self.reward_flag = False  # Reset flag
+                return 1
+            return 0
+    
+    def step(self, action):
+        if self.target_hz is not None:
+            start_time = time.time()
+        
+        obs, rew, done, truncated, info = self.env.step(action)
+        
+        # Check for keyboard reward
+        keyboard_reward = self.compute_reward(obs)
+        if keyboard_reward > 0:
+            rew = keyboard_reward
+            done = True  # End episode when reward is given
+            info['succeed'] = True
+        else:
+            rew = 0
+            info['succeed'] = False
+        
+        if self.target_hz is not None:
+            elapsed_time = time.time() - start_time
+            sleep_time = 1.0 / self.target_hz - elapsed_time
+            if sleep_time > 0:
+                time.sleep(sleep_time)
+        
+        return obs, rew, done, truncated, info
+    
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        with self.lock:
+            self.reward_flag = False
+            self.episode_rewarded = False  # Reset for new episode
+        info['succeed'] = False
+        return obs, info
+    
+    def close(self):
+        """Clean up keyboard listener"""
+        self.listener.stop()
+        super().close()
 
 
 class Quat2EulerWrapper(gym.ObservationWrapper):
@@ -205,12 +283,15 @@ class GripperCloseEnv(gym.ActionWrapper):
 
     
 class SpacemouseIntervention(gym.ActionWrapper):
-    def __init__(self, env, action_indices=None):
+    def __init__(self, env, action_indices=None, gripper_enabled=None):
         super().__init__(env)
 
-        self.gripper_enabled = True
-        if self.action_space.shape == (6,):
-            self.gripper_enabled = False
+        if gripper_enabled is not None:
+            self.gripper_enabled = gripper_enabled
+        else:
+            self.gripper_enabled = True
+            if self.action_space.shape == (6,):
+                self.gripper_enabled = False
 
         self.expert = SpaceMouseExpert()
         self.left, self.right = False, False
@@ -241,6 +322,14 @@ class SpacemouseIntervention(gym.ActionWrapper):
             
             # Always use the current gripper state
             gripper_action = np.array([self.gripper_state])
+            #______
+        else:
+            # When gripper is disabled, still add a zero gripper action to maintain 7D
+            gripper_action = np.array([0.0])
+        
+        # Always concatenate gripper action to maintain consistent action dimensions
+        if self.action_space.shape[0] == 7:  # Only add if env expects gripper
+            #____
             expert_a = np.concatenate((expert_a, gripper_action), axis=0)
 
         if self.action_indices is not None:

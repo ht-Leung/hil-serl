@@ -10,8 +10,8 @@ build/
 .Python
 
 # Experiment data and checkpoints
-examples/classifier_ckpt/
-examples/classifier_data/
+classifier_ckpt/
+classifier_data/
 
 # Virtual environments
 venv/
@@ -37,3 +37,6 @@ wandb/
 .pytest_cache/
 .coverage
 htmlcov/
+*.pkl
+demo_data/
+weights/

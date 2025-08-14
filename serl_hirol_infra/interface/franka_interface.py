@@ -91,8 +91,18 @@ class FrankaInterface(RobotInterface):
         if self._robot.has_gripper():
             gripper_width = self._robot.get_gripper_width()
             gripper_pos = gripper_width / 0.08  # 归一化到[0,1]
+            # 获取 is_grasped 状态
+            try:
+                if hasattr(self._robot, '_gripper') and hasattr(self._robot._gripper, 'get_tool_state'):
+                    gripper_state = self._robot._gripper.get_tool_state()
+                    gripper_is_grasped = gripper_state._is_grasped if hasattr(gripper_state, '_is_grasped') else False
+                else:
+                    gripper_is_grasped = False
+            except:
+                gripper_is_grasped = False
         else:
             gripper_pos = 0.0
+            gripper_is_grasped = False
         
         # 计算雅可比矩阵
         jacobian = self._compute_jacobian(joint_positions)
@@ -106,6 +116,7 @@ class FrankaInterface(RobotInterface):
             force=force,
             torque=torque,
             gripper_pos=gripper_pos,
+            gripper_is_grasped=gripper_is_grasped,
             q=joint_positions,
             dq=joint_velocities,
             jacobian=jacobian
@@ -295,16 +306,72 @@ class FrankaInterface(RobotInterface):
         if not self._robot.has_gripper():
             logger.warning("Gripper not available")
             return
-        
-        self._robot.open_gripper().wait_gripper_idle()
+        # 阻塞直到夹爪动作完成
+        # self._robot.open_gripper().wait_gripper_idle()
+        self._robot.open_gripper()
     
     def close_gripper(self) -> None:
         """完全关闭夹爪"""
         if not self._robot.has_gripper():
             logger.warning("Gripper not available")
             return
+        # 阻塞直到夹爪动作完成
+        # self._robot.close_gripper().wait_gripper_idle()
+        self._robot.close_gripper()
+    
+    def recover_gripper(self) -> bool:
+        """
+        恢复夹爪功能 - 重新连接并执行 homing 操作
         
-        self._robot.close_gripper().wait_gripper_idle()
+        返回:
+            bool: True 如果恢复成功，False 如果失败
+        """
+        if not self._robot.has_gripper():
+            logger.warning("Gripper not available")
+            return False
+        
+        try:
+            # 检查是否能访问底层 gripper 对象
+            if hasattr(self._robot, '_gripper'):
+                logger.info("Attempting gripper recovery...")
+                
+                # 首先尝试简单的 homing（如果连接还在）
+                try:
+                    if hasattr(self._robot._gripper, '_gripper'):
+                        success = self._robot._gripper._gripper.homing()
+                        if success:
+                            logger.info("Gripper homing successful")
+                            # 移动到打开位置
+                            try:
+                                self._robot._gripper._gripper.move(0.08, 0.02)
+                                state = self._robot._gripper._gripper.read_once()
+                                self._robot._gripper._max_width = state.max_width
+                                logger.info("Gripper recovered via homing")
+                            except Exception as e:
+                                logger.warning(f"Failed to update gripper state after homing: {e}")
+                            return True
+                except Exception as e:
+                    logger.warning(f"Homing failed, attempting reconnection: {e}")
+                
+                # 如果 homing 失败（可能是连接断开），尝试重连
+                if hasattr(self._robot._gripper, 'reconnect'):
+                    logger.info("Attempting gripper reconnection...")
+                    success = self._robot._gripper.reconnect()
+                    if success:
+                        logger.info("Gripper reconnected successfully")
+                        return True
+                    else:
+                        logger.error("Gripper reconnection failed")
+                        return False
+                else:
+                    logger.error("Gripper does not support reconnection")
+                    return False
+            else:
+                logger.warning("Cannot access gripper object")
+                return False
+        except Exception as e:
+            logger.error(f"Gripper recovery failed: {e}")
+            return False
     
     def joint_reset(self) -> None:
         """执行关节级别的重置，返回home位置"""

@@ -13,7 +13,9 @@ from hirol_env.envs.wrappers import (
     Quat2EulerWrapper,
     SpacemouseIntervention,
     MultiCameraBinaryRewardClassifierWrapper,
+    KeyboardRewardWrapper,
 )
+from experiments.fr3_reach.wrapper import GripperPenaltyWrapper
 from hirol_env.envs.relative_env import RelativeFrame
 from serl_launcher.wrappers.serl_obs_wrappers import SERLObsWrapper
 from serl_launcher.wrappers.chunking import ChunkingWrapper
@@ -26,7 +28,7 @@ class EnvConfig(DefaultEnvConfig):
     """Configuration for FR3 reach task"""
     
     # Robot IP
-    ROBOT_IP = "192.168.3.102"
+    ROBOT_IP = "192.168.1.206"
     
     # Camera configuration  
     REALSENSE_CAMERAS = {
@@ -42,7 +44,7 @@ class EnvConfig(DefaultEnvConfig):
     # TARGET_POSE = np.array([0.1, 0.0, 0.3, -np.pi, 0, 0])
     
     # Reset pose - slightly offset from target
-    RESET_POSE = np.array([0.5, 0.0, 0.3, -np.pi, 0, 0])
+    RESET_POSE = np.array([0.5, 0.0, 0.4, -np.pi, 0, 0])
     
     # Reward threshold - 2cm for position, 0.1 rad for orientation
     REWARD_THRESHOLD = np.array([0.02, 0.02, 0.02, 0.1, 0.1, 0.1])
@@ -50,7 +52,7 @@ class EnvConfig(DefaultEnvConfig):
     # Action scale: [position_scale, rotation_scale, gripper_scale]
     # Optimized for SpaceMouse control (max output ~0.26 after scaling by 350)
     # Position: 0.26 * 0.02 = 5.2mm per frame, at 10Hz = 52mm/s max velocity
-    ACTION_SCALE = np.array([0.01, 0.00, 1])  # Slightly increased for responsiveness
+    ACTION_SCALE = np.array([0.02, 0.02, 0])  # Slightly increased for responsiveness
     
     # Critical Damped Tracker parameters (二阶临界阻尼跟踪器)
     # Natural frequency (rad/s) - controls tracking responsiveness
@@ -66,13 +68,13 @@ class EnvConfig(DefaultEnvConfig):
     RANDOM_RZ_RANGE = 0.1
     
     # Workspace limits
-    ABS_POSE_LIMIT_HIGH = np.array([0.7, 0.3, 0.45, np.pi+0.5, 0.5, 0.5])
-    ABS_POSE_LIMIT_LOW = np.array([0.3, -0.3, 0.2, np.pi-0.5, -0.5, -0.5])
+    ABS_POSE_LIMIT_HIGH = np.array([0.7, 0.3, 0.55, np.pi+0.5, 0.5, 0.5])
+    ABS_POSE_LIMIT_LOW = np.array([0.3, -0.3, 0.3, np.pi-0.5, -0.5, -0.5])
     
     # Display
     DISPLAY_IMAGE = True
-    GRIPPER_SLEEP = 0.1
-    MAX_EPISODE_LENGTH = 200
+    GRIPPER_SLEEP = 0.0
+    MAX_EPISODE_LENGTH = 120
     # JOINT_RESET_PERIOD = 100  # Reset joints every 20 episodes
 
 
@@ -81,7 +83,8 @@ class TrainConfig(DefaultTrainingConfig):
     
     # Image and proprioception keys
     image_keys = ["side", "wrist_1"]
-    classifier_keys = ["side", "wrist_1"]  # Use both cameras for classifier
+    classifier_keys = ["side" ,"wrist_1"
+                       ]  # Use both cameras for classifier
     proprio_keys = ["tcp_pose", "tcp_vel", "tcp_force", "tcp_torque", "gripper_pose"]
     
     # Training parameters
@@ -91,7 +94,9 @@ class TrainConfig(DefaultTrainingConfig):
     discount = 0.98
     buffer_period = 1000
     encoder_type = "resnet-pretrained"
-    setup_mode = "single-arm-learned-gripper"
+    
+    # setup_mode = "single-arm-learned-gripper"
+    setup_mode = "single-arm-fixed-gripper"
     
     def get_environment(self, fake_env=False, save_video=False, classifier=True):
         """Create and configure the FR3 reach environment"""
@@ -106,21 +111,25 @@ class TrainConfig(DefaultTrainingConfig):
         
         # Add spacemouse intervention for human demonstrations
         if not fake_env:
-            env = SpacemouseIntervention(env)
+            env = SpacemouseIntervention(env, gripper_enabled=False)
         env = RelativeFrame(env)
         
         # Add wrappers
         env = Quat2EulerWrapper(env)
+        # env = GripperPenaltyWrapper(env, penalty=-0.02)  # Add gripper penalty tracking
         env = SERLObsWrapper(env, proprio_keys=self.proprio_keys)
         env = ChunkingWrapper(env, obs_horizon=1, act_exec_horizon=None)
         
-        # Add classifier-based reward if requested
+        # Add keyboard reward if requested (press 's' to give reward)
         if classifier:
+            # env = KeyboardRewardWrapper(env)
+            
+            # 如果用视觉分类器作为奖励函数，可以使用以下代码
             classifier = load_classifier_func(
                 key=jax.random.PRNGKey(0),
                 sample=env.observation_space.sample(),
                 image_keys=self.classifier_keys,
-                checkpoint_path=os.path.abspath("classifier_ckpt/"),
+                checkpoint_path="/home/hanyu/code/hil-serl/examples/classifier_ckpt/checkpoint_150",
             )
 
             def reward_func(obs):
@@ -132,7 +141,9 @@ class TrainConfig(DefaultTrainingConfig):
                     logit = logit.squeeze()
                     if logit.shape:  # Still has dimensions
                         logit = logit[0]
-                return int(sigmoid(logit) > 0.5)
+                return int(sigmoid(logit) > 0.75)
+
+
 
             env = MultiCameraBinaryRewardClassifierWrapper(env, reward_func)
         

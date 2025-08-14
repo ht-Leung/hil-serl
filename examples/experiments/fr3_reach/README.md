@@ -86,7 +86,7 @@ cd /home/hanyu/code/hil-serl/examples
 python record_demos.py --exp_name=fr3_reach --successes_needed=20
 ```
 
-**Option 2: Record success/failure episodes for classifier training**
+**Option 2: Record success/failure episodes for classifier training（before demo recording）**
 ```bash
 # Navigate to examples directory
 cd /home/hanyu/code/hil-serl/examples

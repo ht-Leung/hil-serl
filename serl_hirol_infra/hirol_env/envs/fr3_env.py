@@ -104,7 +104,7 @@ class DefaultEnvConfig:
     
     # Display and timing
     DISPLAY_IMAGE: bool = True
-    GRIPPER_SLEEP: float = 0.6
+    GRIPPER_SLEEP: float = 0.1
     MAX_EPISODE_LENGTH: int = 100
     JOINT_RESET_PERIOD: int = 0
 
@@ -233,8 +233,30 @@ class FR3Env(gym.Env):
             from pynput import keyboard
             self.terminate = False
             def on_press(key):
-                if key == keyboard.Key.esc:
-                    self.terminate = True
+                # if key == keyboard.Key.esc:
+                #     self.terminate = True
+                try:
+                    if key == keyboard.Key.esc:
+                        self.terminate = True
+                    elif hasattr(key, 'char') and key.char == 'g':
+                        print("\n[Manual Recovery] 'g' key pressed - Recovering gripper...")
+                        if hasattr(self.robot, 'recover_gripper'):
+                            success = self.robot.recover_gripper()
+                            if success:
+                                print("[Manual Recovery] Gripper recovery successful via homing")
+                                self._update_currpos()
+                                
+                            else:
+                                print("[Manual Recovery] Gripper recovery failed, trying error  clear...")
+                                self._recover()
+                        else:
+                            print("[Manual Recovery] Using general error recovery")
+                            self._recover()
+                        print("[Manual Recovery] Recovery attempt completed\n")
+                except Exception as e:
+                    print(f"[Manual Recovery] Error handling key press: {e}")
+                    print("Keyboard controls: ESC = terminate, G = recover gripper,建议连续按两次G键进行恢复")
+                    
             self.listener = keyboard.Listener(on_press=on_press)
             self.listener.start()
             
@@ -423,6 +445,9 @@ class FR3Env(gym.Env):
         # Move to reset position using smooth trajectory
         # send_pos_trajectory_command now properly handles tracker pause/resume
         if self.robot is not None and hasattr(self.robot, 'send_pos_trajectory_command'):
+            up_pose = self.currpos.copy()
+            up_pose[:3] += np.array([0, 0, 0.1])  # Move up by 10cm
+            self.robot.send_pos_trajectory_command(up_pose, finish_time=1.0)
             self.robot.send_pos_trajectory_command(reset_pose, finish_time=1.0)
         else:
             self.interpolate_move(reset_pose, timeout=1.0)
@@ -452,7 +477,8 @@ class FR3Env(gym.Env):
             joint_reset = True
 
         self._recover()
-        self.robot.open_gripper()
+        # self.robot.open_gripper()
+        time.sleep(0.5)
         self.go_to_reset(joint_reset=joint_reset)
         self._recover()
         self.curr_path_length = 0
@@ -464,6 +490,26 @@ class FR3Env(gym.Env):
         
         obs = self._get_obs()
         self.terminate = False
+        
+        # Non-blocking wait for Enter key while allowing keyboard events to be processed
+        print("press enter to start episode...")
+        import sys, select
+        
+        # Use a flag to track if Enter was pressed
+        enter_pressed = False
+        
+        # Check for input with timeout to allow keyboard event processing
+        while not enter_pressed and not self.terminate:
+            # Check if input is available with 0.1 second timeout
+            if sys.stdin in select.select([sys.stdin], [], [], 0.1)[0]:
+                line = sys.stdin.readline()
+                if line:  # Enter was pressed
+                    enter_pressed = True
+                    break
+            
+            # Small sleep to prevent CPU spinning
+            time.sleep(0.01)
+        
         return obs, {"succeed": False}
 
     def save_video_recording(self) -> None:
@@ -541,11 +587,11 @@ class FR3Env(gym.Env):
             
         if mode == "binary":
             current_gripper = self.curr_gripper_pos[0] if isinstance(self.curr_gripper_pos, np.ndarray) else self.curr_gripper_pos
-            if (pos <= -0.5) and (current_gripper > 0.85) and (time.time() - self.last_gripper_act > self.gripper_sleep):  # close gripper
+            if (pos <= -0.5) and (current_gripper > 0.65) and (time.time() - self.last_gripper_act > self.gripper_sleep):  # close gripper
                 self.robot.close_gripper()
                 self.last_gripper_act = time.time()
                 time.sleep(self.gripper_sleep)
-            elif (pos >= 0.5) and (current_gripper < 0.85) and (time.time() - self.last_gripper_act > self.gripper_sleep):  # open gripper
+            elif (pos >= 0.5) and (current_gripper < 0.65) and (time.time() - self.last_gripper_act > self.gripper_sleep):  # open gripper
                 self.robot.open_gripper()
                 self.last_gripper_act = time.time()
                 time.sleep(self.gripper_sleep)

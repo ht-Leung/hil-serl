@@ -18,6 +18,7 @@ class RobotState(TypedDict):
     force: np.ndarray       # [fx, fy, fz] - TCP力(3,)
     torque: np.ndarray      # [tx, ty, tz] - TCP力矩(3,)
     gripper_pos: float      # 夹爪开合度 [0-1]
+    gripper_is_grasped: bool = False  # 夹爪是否夹住物体
     q: np.ndarray           # 关节角度(7,)
     dq: np.ndarray          # 关节速度(7,)
     jacobian: np.ndarray    # 雅可比矩阵(6,7)
