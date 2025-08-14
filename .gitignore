@@ -40,4 +40,4 @@ htmlcov/
 *.pkl
 demo_data/
 examples/weights/
-examples/experiments/fr3_reach/first_runfirst_run/
+examples/experiments/fr3_reach/first_run/
