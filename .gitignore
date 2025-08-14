@@ -40,3 +40,4 @@ htmlcov/
 *.pkl
 demo_data/
 weights/
+first_run/
