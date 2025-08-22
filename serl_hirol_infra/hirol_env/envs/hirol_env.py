@@ -8,6 +8,8 @@ from scipy.spatial.transform import Rotation
 import time
 import queue
 import threading
+import signal
+import atexit
 from datetime import datetime
 from collections import OrderedDict
 from typing import Dict, Optional, Tuple, Any
@@ -61,8 +63,6 @@ class DefaultEnvConfig:
     
     # Camera configuration
     REALSENSE_CAMERAS: Dict = {
-        "wrist_1": {"serial_number": "130322274175"},
-        "wrist_2": {"serial_number": "127122270572"},
     }
     IMAGE_CROP: dict[str, callable] = {}
     
@@ -143,6 +143,9 @@ class HIROLEnv(gym.Env):
         self._REWARD_THRESHOLD = self.config.REWARD_THRESHOLD
         self.max_episode_length = self.config.MAX_EPISODE_LENGTH
         self.display_image = self.config.DISPLAY_IMAGE
+        
+        # Initialize cleanup flag
+        self._closing = False
         self.gripper_sleep = self.config.GRIPPER_SLEEP
         
         # Control parameters
@@ -257,6 +260,10 @@ class HIROLEnv(gym.Env):
                     
             self.listener = keyboard.Listener(on_press=on_press)
             self.listener.start()
+            
+            # Register cleanup handlers for graceful shutdown
+            self._cleanup_registered = False
+            self._register_cleanup_handlers()
             
             print("Initialized HIROL Environment")
         else:
@@ -696,14 +703,65 @@ class HIROLEnv(gym.Env):
         }
         return copy.deepcopy(dict(images=images, state=state_observation))
 
+    def _register_cleanup_handlers(self) -> None:
+        """Register signal handlers and atexit for graceful shutdown"""
+        if self._cleanup_registered:
+            return
+        
+        # Register signal handler for Ctrl+C
+        signal.signal(signal.SIGINT, self._signal_handler)
+        signal.signal(signal.SIGTERM, self._signal_handler)
+        
+        # Register atexit handler
+        atexit.register(self.close)
+        
+        self._cleanup_registered = True
+    
+    def _signal_handler(self, signum, frame) -> None:
+        """Handle interrupt signals gracefully"""
+        print("\n[HIROLEnv] Received interrupt signal, cleaning up...")
+        self.close()
+        # Exit cleanly without raising KeyboardInterrupt
+        sys.exit(0)
+
     def close(self) -> None:
         """Clean up resources"""
+        # Prevent recursive cleanup
+        if hasattr(self, '_closing') and self._closing:
+            return
+        self._closing = True
+        
+        print("[HIROLEnv] Starting cleanup...")
+        
+        # Stop keyboard listener
         if hasattr(self, 'listener'):
-            self.listener.stop()
-        self.close_cameras()
-        if self.display_image:
-            self.img_queue.put(None)
-            cv2.destroyAllWindows()
-            self.displayer.join()
-        if self.robot is not None:
-            self.robot.close()
+            try:
+                self.listener.stop()
+            except:
+                pass
+        
+        # Close cameras
+        try:
+            self.close_cameras()
+        except Exception as e:
+            print(f"[HIROLEnv] Error closing cameras: {e}")
+        
+        # Stop image display thread
+        if hasattr(self, 'display_image') and self.display_image:
+            try:
+                self.img_queue.put(None)
+                cv2.destroyAllWindows()
+                if hasattr(self, 'displayer'):
+                    self.displayer.join(timeout=1.0)
+            except:
+                pass
+        
+        # Close robot interface
+        if hasattr(self, 'robot') and self.robot is not None:
+            try:
+                self.robot.close()
+                print("[HIROLEnv] Robot interface closed")
+            except Exception as e:
+                print(f"[HIROLEnv] Error closing robot: {e}")
+        
+        print("[HIROLEnv] Cleanup complete")

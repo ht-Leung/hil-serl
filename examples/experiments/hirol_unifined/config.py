@@ -33,7 +33,8 @@ class EnvConfig(DefaultEnvConfig):
     # Camera configuration  
     REALSENSE_CAMERAS = {
         "wrist_1": {"serial_number": "332322073603"},
-        "side": {"serial_number": "244222075350"},
+        "front": {"serial_number": "244222075350"},
+        "side": {"serial_number": "317422071787"},
     }
     IMAGE_CROP = {
         # "wrist": lambda img: img[:, 250:],
@@ -83,7 +84,7 @@ class TrainConfig(DefaultTrainingConfig):
     
     # Image and proprioception keys
     image_keys = ["side", "wrist_1"]
-    classifier_keys = ["side" ,"wrist_1"
+    classifier_keys = ["side" ,"wrist_1", "front"
                        ]  # Use both cameras for classifier
     proprio_keys = ["tcp_pose", "tcp_vel", "tcp_force", "tcp_torque", "gripper_pose"]
     
