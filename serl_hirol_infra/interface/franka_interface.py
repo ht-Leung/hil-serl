@@ -194,13 +194,15 @@ class FrankaInterface(RobotInterface):
             sync_to_current: 是否同步跟踪器状态到当前关节位置
         """
         if sync_to_current:
-            # 获取当前实际关节位置
+            # 获取当前实际关节位置和速度
             current_joints = self._robot.get_joint_positions()
+            current_velocities = self._robot.get_joint_velocities()
             with self._tracker_lock:
                 # 同步跟踪器状态，避免跳变
                 self._current_joints = current_joints.copy()
                 self._target_joints = current_joints.copy()
-                self._joint_velocity = np.zeros(7)
+                # 使用真实速度，确保速度连续性
+                self._joint_velocity = current_velocities.copy()
                 self._pause_tracker = False
         else:
             with self._tracker_lock:
@@ -613,7 +615,8 @@ class FrankaInterface(RobotInterface):
         """启动常驻的二阶跟踪器线程"""
         # 初始化状态
         self._current_joints = self._robot.get_joint_positions()
-        self._joint_velocity = np.zeros(7)
+        # 使用真实的关节速度，确保启动时速度连续
+        self._joint_velocity = self._robot.get_joint_velocities()
         self._target_joints = self._current_joints.copy()
         
         # 创建并启动线程

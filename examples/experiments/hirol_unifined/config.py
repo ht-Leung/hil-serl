@@ -1,4 +1,4 @@
-"""Configuration for FR3 reach task using FrankaInterface"""
+"""Configuration for HIROL Unified task using HIROLRobotPlatform"""
 import os
 import sys
 import jax
@@ -8,14 +8,14 @@ import jax.numpy as jnp
 # Add serl_hirol_infra to path
 sys.path.insert(0, '/home/hanyu/code/hil-serl/serl_hirol_infra')
 
-from hirol_env.envs.fr3_env import DefaultEnvConfig, FR3Env
+from hirol_env.envs.hirol_env import DefaultEnvConfig, HIROLEnv
 from hirol_env.envs.wrappers import (
     Quat2EulerWrapper,
     SpacemouseIntervention,
     MultiCameraBinaryRewardClassifierWrapper,
     KeyboardRewardWrapper,
 )
-from experiments.fr3_reach.wrapper import GripperPenaltyWrapper
+from experiments.hirol_unifined.wrapper import GripperPenaltyWrapper, HIROLUnifiedEnv
 from hirol_env.envs.relative_env import RelativeFrame
 from serl_launcher.wrappers.serl_obs_wrappers import SERLObsWrapper
 from serl_launcher.wrappers.chunking import ChunkingWrapper
@@ -25,10 +25,10 @@ from experiments.config import DefaultTrainingConfig
 
 
 class EnvConfig(DefaultEnvConfig):
-    """Configuration for FR3 reach task"""
+    """Configuration for HIROL Unified task"""
     
-    # Robot IP
-    ROBOT_IP = "192.168.1.206"
+    # Robot configuration file path (HIROLRobotPlatform uses config files)
+    ROBOT_CONFIG_PATH = None  # Will use default serl_fr3_config.yaml if None
     
     # Camera configuration  
     REALSENSE_CAMERAS = {
@@ -41,7 +41,7 @@ class EnvConfig(DefaultEnvConfig):
     }
     
     # Target pose for reaching (x, y, z, roll, pitch, yaw)
-    # TARGET_POSE = np.array([0.1, 0.0, 0.3, -np.pi, 0, 0])
+    # TARGET_POSE = np.array([0.5, 0.1, 0.3, -np.pi, 0, 0])
     
     # Reset pose - slightly offset from target
     RESET_POSE = np.array([0.5, 0.0, 0.4, -np.pi, 0, 0])
@@ -60,7 +60,7 @@ class EnvConfig(DefaultEnvConfig):
     # Medium values (20-30): Balanced (default 25)
     # Higher values (30-40): Faster response, stiffer
     # Formula: settling_time ≈ 4.6 / omega_n
-    TRACKER_OMEGA_N = 25.0  # Default: 0.18s settling time
+    # TRACKER_OMEGA_N = 25.0  # Default: 0.18s settling time
       
     # Enable random reset for diversity
     RANDOM_RESET = False
@@ -79,7 +79,7 @@ class EnvConfig(DefaultEnvConfig):
 
 
 class TrainConfig(DefaultTrainingConfig):
-    """Training configuration for FR3 reach task"""
+    """Training configuration for HIROL Unified task"""
     
     # Image and proprioception keys
     image_keys = ["side", "wrist_1"]
@@ -121,10 +121,10 @@ class TrainConfig(DefaultTrainingConfig):
         return str(self.data_path / "classifier_ckpt")
     
     def get_environment(self, fake_env=False, save_video=False, classifier=True):
-        """Create and configure the FR3 reach environment"""
+        """Create and configure the HIROL Unified environment"""
         
         # Create base environment
-        env = FR3Env(
+        env = HIROLUnifiedEnv(
             hz=10,
             fake_env=fake_env, 
             save_video=save_video, 

@@ -67,15 +67,17 @@ def main(_):
             if done or truncated:
                 obs, _ = env.reset()
 
-        if not os.path.exists("./classifier_data"):
-            os.makedirs("./classifier_data")
+        # Use config-specific classifier data path
+        classifier_data_dir = config.classifier_data_path if hasattr(config, 'classifier_data_path') else "./classifier_data"
+        if not os.path.exists(classifier_data_dir):
+            os.makedirs(classifier_data_dir)
         uuid = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-        file_name = f"./classifier_data/{FLAGS.exp_name}_{success_needed}_success_images_{uuid}.pkl"
+        file_name = f"{classifier_data_dir}/{FLAGS.exp_name}_{success_needed}_success_images_{uuid}.pkl"
         with open(file_name, "wb") as f:
             pkl.dump(successes, f)
             print(f"saved {success_needed} successful transitions to {file_name}")
 
-        file_name = f"./classifier_data/{FLAGS.exp_name}_failure_images_{uuid}.pkl"
+        file_name = f"{classifier_data_dir}/{FLAGS.exp_name}_failure_images_{uuid}.pkl"
         with open(file_name, "wb") as f:
             pkl.dump(failures, f)
             print(f"saved {len(failures)} failure transitions to {file_name}")

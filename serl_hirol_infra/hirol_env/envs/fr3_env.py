@@ -477,7 +477,7 @@ class FR3Env(gym.Env):
             joint_reset = True
 
         self._recover()
-        # self.robot.open_gripper()
+        self.robot.open_gripper()
         time.sleep(0.5)
         self.go_to_reset(joint_reset=joint_reset)
         self._recover()
@@ -512,7 +512,7 @@ class FR3Env(gym.Env):
             
         _ = self.get_im()  # 丢弃这一帧
         time.sleep(0.1)    # 给相机时间捕获新帧
-      # 现在获取真正的观察
+        # 现在获取真正的观察
         obs = self._get_obs()
         
         return obs, {"succeed": False}

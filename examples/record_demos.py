@@ -59,10 +59,12 @@ def main(_):
             returns = 0
             obs, info = env.reset()
             
-    if not os.path.exists("./demo_data"):
-        os.makedirs("./demo_data")
+    # Use config-specific demo data path
+    demo_data_dir = config.demo_data_path if hasattr(config, 'demo_data_path') else "./demo_data"
+    if not os.path.exists(demo_data_dir):
+        os.makedirs(demo_data_dir)
     uuid = datetime.datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
-    file_name = f"./demo_data/{FLAGS.exp_name}_{success_needed}_demos_{uuid}.pkl"
+    file_name = f"{demo_data_dir}/{FLAGS.exp_name}_{success_needed}_demos_{uuid}.pkl"
     with open(file_name, "wb") as f:
         pkl.dump(transitions, f)
         print(f"saved {success_needed} demos to {file_name}")

@@ -40,7 +40,9 @@ def main(_):
         include_label=True,
     )
 
-    success_paths = glob.glob(os.path.join(os.getcwd(), "classifier_data", "*success*.pkl"))
+    # Use config-specific classifier data path
+    classifier_data_dir = config.classifier_data_path if hasattr(config, 'classifier_data_path') else os.path.join(os.getcwd(), "classifier_data")
+    success_paths = glob.glob(os.path.join(classifier_data_dir, "*success*.pkl"))
     for path in success_paths:
         success_data = pkl.load(open(path, "rb"))
         for trans in success_data:
@@ -64,7 +66,7 @@ def main(_):
         capacity=50000,
         include_label=True,
     )
-    failure_paths = glob.glob(os.path.join(os.getcwd(), "classifier_data", "*failure*.pkl"))
+    failure_paths = glob.glob(os.path.join(classifier_data_dir, "*failure*.pkl"))
     for path in failure_paths:
         failure_data = pkl.load(
             open(path, "rb")
@@ -150,8 +152,10 @@ def main(_):
             f"Epoch: {epoch+1}, Train Loss: {train_loss:.4f}, Train Accuracy: {train_accuracy:.4f}"
         )
 
+    # Use config-specific checkpoint path
+    classifier_ckpt_dir = config.classifier_ckpt_path if hasattr(config, 'classifier_ckpt_path') else os.path.join(os.getcwd(), "classifier_ckpt/")
     checkpoints.save_checkpoint(
-        os.path.join(os.getcwd(), "classifier_ckpt/"),
+        classifier_ckpt_dir,
         classifier,
         step=FLAGS.num_epochs,
         overwrite=True,

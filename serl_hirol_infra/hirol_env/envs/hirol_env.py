@@ -1,4 +1,4 @@
-"""Gym Interface for HIROL using HIROLInterface"""
+"""Gym Interface for FR3 using HIROLRobotPlatform's SerlRobotInterface"""
 import os
 import numpy as np
 import gymnasium as gym
@@ -13,20 +13,18 @@ from collections import OrderedDict
 from typing import Dict, Optional, Tuple, Any
 from pathlib import Path
 import sys
-import yaml
 
 # Add paths for imports
-serl_hirol_path = Path(__file__).parents[2]  # serl_hirol_infra directory
-sys.path.insert(0, str(serl_hirol_path))
+sys.path.insert(0, "/home/hanyu/code/HIROLRobotPlatform")
+sys.path.insert(0, "/home/hanyu/code/hil-serl/serl_hirol_infra")
 
-# Import camera utilities from hirol_env
+# Import camera utilities
 from hirol_env.camera.video_capture import VideoCapture
 from hirol_env.camera.rs_capture import RSCapture
-from hil_utils.rotations import euler_2_quat
+from hil_utils.rotations import euler_2_quat, quat_2_euler
 
-# Import HIROLInterface and HIROLRobotPlatform components
-from interface.hirol_interface import HIROLInterface
-from hardware.base.utils import dynamic_load_yaml
+# Import SerlRobotInterface from HIROLRobotPlatform
+from factory.tasks.inferences_tasks.serl.serl_robot_interface import SerlRobotInterface, ComplianceParams
 
 
 class ImageDisplayer(threading.Thread):
@@ -51,17 +49,24 @@ class ImageDisplayer(threading.Thread):
             cv2.waitKey(1)
 
 
+
 ##############################################################################
 
 
 class DefaultEnvConfig:
     """Default configuration for HIROLEnv. Fill in the values below."""
 
+    # Configuration file path for HIROLRobotPlatform
+    ROBOT_CONFIG_PATH: Optional[str] = None  # Will use default serl_fr3_config.yaml if None
+    
+    # Camera configuration
     REALSENSE_CAMERAS: Dict = {
-        "wrist_1": "332322073603",
-        "side": "244222075350",
+        "wrist_1": {"serial_number": "130322274175"},
+        "wrist_2": {"serial_number": "127122270572"},
     }
     IMAGE_CROP: dict[str, callable] = {}
+    
+    # Task parameters
     TARGET_POSE: np.ndarray = np.zeros((6,))
     GRASP_POSE: np.ndarray = np.zeros((6,))
     REWARD_THRESHOLD: np.ndarray = np.zeros((6,))
@@ -70,16 +75,36 @@ class DefaultEnvConfig:
     RANDOM_RESET = False
     RANDOM_XY_RANGE = (0.0,)
     RANDOM_RZ_RANGE = (0.0,)
+    
+    # Workspace limits
     ABS_POSE_LIMIT_HIGH = np.zeros((6,))
     ABS_POSE_LIMIT_LOW = np.zeros((6,))
-    COMPLIANCE_PARAM: Dict[str, float] = {}
-    RESET_PARAM: Dict[str, float] = {}
-    PRECISION_PARAM: Dict[str, float] = {}
-    LOAD_PARAM: Dict[str, float] = {
-        "mass": 0.0,
-        "F_x_center_load": [0.0, 0.0, 0.0],
-        "load_inertia": [0, 0, 0, 0, 0, 0, 0, 0, 0]
-    }
+    
+    # Compliance parameters for smooth motion
+    COMPLIANCE_PARAM: ComplianceParams = ComplianceParams(
+        translational_stiffness=1500,
+        translational_damping=80,
+        rotational_stiffness=100,
+        rotational_damping=10,
+    )
+    
+    # Precision parameters for reset
+    PRECISION_PARAM: ComplianceParams = ComplianceParams(
+        translational_stiffness=2000,
+        translational_damping=89,
+        rotational_stiffness=150,
+        rotational_damping=7,
+    )
+    
+    # Reset compliance parameters
+    RESET_PARAM: ComplianceParams = ComplianceParams(
+        translational_stiffness=1800,
+        translational_damping=85,
+        rotational_stiffness=120,
+        rotational_damping=8,
+    )
+    
+    # Display and timing
     DISPLAY_IMAGE: bool = True
     GRIPPER_SLEEP: float = 0.6
     MAX_EPISODE_LENGTH: int = 100
@@ -90,11 +115,11 @@ class DefaultEnvConfig:
 
 
 class HIROLEnv(gym.Env):
-    """HIROL Gym Environment using HIROLInterface for robot control"""
+    """HIROL Gym Environment using SerlRobotInterface for robot control"""
     
     def __init__(
         self,
-        hz=800,
+        hz=10,
         fake_env=False,
         save_video=False,
         config: DefaultEnvConfig = None,
@@ -104,7 +129,7 @@ class HIROLEnv(gym.Env):
         Initialize HIROLEnv
         
         Args:
-            hz: Control frequency
+            hz: Control frequency  
             fake_env: Use simulation instead of real hardware
             save_video: Save video recordings of episodes
             config: Environment configuration
@@ -138,6 +163,7 @@ class HIROLEnv(gym.Env):
         self.last_gripper_act = time.time()
         self.lastsent = time.time()
         
+        self.ideal_pose = None  # Will be initialized in reset()
         # Video recording
         self.save_video = save_video
         if self.save_video:
@@ -184,7 +210,11 @@ class HIROLEnv(gym.Env):
         
         # Initialize interface if not fake_env
         if not fake_env:
-            self._init_interface(fake_env)
+            # Initialize SerlRobotInterface
+            self.robot = SerlRobotInterface(
+                config_path=self.config.ROBOT_CONFIG_PATH,
+                auto_initialize=True
+            )
             self._update_currpos()
             
             # Initialize cameras
@@ -197,94 +227,49 @@ class HIROLEnv(gym.Env):
                 self.displayer = ImageDisplayer(self.img_queue, "HIROLEnv")
                 self.displayer.start()
             
-            # Set load parameters if requested (not implemented in HIROLInterface yet)
-            if set_load:
-                input("Put arm into programing mode and press enter.")
-                # TODO: Set load using interface when supported
-                input("Put arm into execution mode and press enter.")
-                for _ in range(2):
-                    self._recover()
-                    time.sleep(1)
-            
             # Keyboard listener for termination
             from pynput import keyboard
             self.terminate = False
             def on_press(key):
-                if key == keyboard.Key.esc:
-                    self.terminate = True
+                # if key == keyboard.Key.esc:
+                #     self.terminate = True
+                try:
+                    if key == keyboard.Key.esc:
+                        self.terminate = True
+                    elif hasattr(key, 'char') and key.char == 'g':
+                        print("\n[Manual Recovery] 'g' key pressed - Recovering gripper...")
+                        if hasattr(self.robot, 'recover_gripper'):
+                            success = self.robot.recover_gripper()
+                            if success:
+                                print("[Manual Recovery] Gripper recovery successful via homing")
+                                self._update_currpos()
+                                
+                            else:
+                                print("[Manual Recovery] Gripper recovery failed, trying error  clear...")
+                                self._recover()
+                        else:
+                            print("[Manual Recovery] Using general error recovery")
+                            self._recover()
+                        print("[Manual Recovery] Recovery attempt completed\n")
+                except Exception as e:
+                    print(f"[Manual Recovery] Error handling key press: {e}")
+                    print("Keyboard controls: ESC = terminate, G = recover gripper,建议连续按两次G键进行恢复")
+                    
             self.listener = keyboard.Listener(on_press=on_press)
             self.listener.start()
             
             print("Initialized HIROL Environment")
         else:
-            self.interface = None
+            self.robot = None
             # Initialize state variables for fake env
             self.currpos = self.resetpos.copy()
             self.currvel = np.zeros(6)
             self.currforce = np.zeros(3)
             self.currtorque = np.zeros(3)
-            self.curr_gripper_pos = 0.0
+            self.curr_gripper_pos = np.array([0.0])
             self.currjacobian = np.zeros((6, 7))
             self.q = np.zeros(7)
             self.dq = np.zeros(7)
-    
-    def _init_interface(self, fake_env: bool) -> None:
-        """Initialize HIROLInterface with configuration"""
-        # Use the same config as test_hirol_interface.py
-        hirol_platform_path = Path(__file__).parents[4] / "HIROLRobotPlatform"
-        config_path = hirol_platform_path / "teleop" / "config" / "franka_3d_mouse.yaml"
-        
-        # Change to teleop directory for loading configs
-        original_cwd = os.getcwd()
-        
-        try:
-            os.chdir(str(hirol_platform_path / "teleop"))
-            config = dynamic_load_yaml(str(config_path))
-        finally:
-            os.chdir(original_cwd)
-        
-        # Override hardware settings based on fake_env
-        config['use_hardware'] = not fake_env
-        config['use_simulation'] = fake_env
-        
-        # Extract robot and motion configurations (same as test_hirol_interface.py)
-        robot_config = {
-            "robot": config['robot'],  
-            "use_hardware": config['use_hardware'],
-            "use_simulation": config['use_simulation'],
-            "robot_config": config['robot_config'],
-            "gripper": config['gripper'],
-            "gripper_config": config['gripper_config'],
-            "simulation": config['simulation'],
-            "simulation_config": config['simulation_config'],
-            "sensor_dicts": {},  # Disable cameras in HIROLRobotPlatform to avoid conflict
-        }
-        
-        motion_config = {
-            "model_type": config['model_type'],
-            "controller_type": config['controller_type'],
-            "use_trajectory_planner": config['use_trajectory_planner'],
-            "buffer_type": config['buffer_type'],
-            "plan_type": config['plan_type'],
-            "trajectory_planner_type": config['trajectory_planner_type'],
-            "traj_frequency": config['traj_frequency'],
-            "control_frequency": config['control_frequency'],
-            "model_config": config['model_config'],
-            "controller_config": config['controller_config'],
-            "trajectory_config": config['trajectory_config'],
-        }
-        
-        # Initialize interface
-        self.interface = HIROLInterface(
-            robot_config=robot_config,
-            motion_config=motion_config,
-            gripper_sleep=self.config.GRIPPER_SLEEP,
-            gripper_range=[0.0, 0.08]
-        )
-        
-        # Wait for interface to be ready
-        while not self.interface.is_ready():
-            time.sleep(0.1)
     
     def clip_safety_box(self, pose: np.ndarray) -> np.ndarray:
         """Clip the pose to be within the safety box."""
@@ -324,6 +309,28 @@ class HIROLEnv(gym.Env):
             Rotation.from_euler("xyz", action[3:6] * self.action_scale[1])
             * Rotation.from_quat(self.currpos[3:])
         ).as_quat()
+        
+        # Use ideal pose instead of current pose to avoid drift accumulation
+        # if self.ideal_pose is not None:
+        #     # Update ideal pose with increments
+        #     self.ideal_pose[:3] = self.ideal_pose[:3] + xyz_delta * self.action_scale[0]
+            
+        #     # Update ideal orientation
+        #     if self.action_scale[1] > 1e-6:  # Only if rotation is enabled
+        #         self.ideal_pose[3:] = (
+        #             Rotation.from_euler("xyz", action[3:6] * self.action_scale[1])
+        #             * Rotation.from_quat(self.ideal_pose[3:])
+        #         ).as_quat()
+            
+        #     self.nextpos = self.ideal_pose.copy()
+        # else:
+        #     # Fallback to current pose (shouldn't happen if reset() is called)
+        #     self.nextpos = self.currpos.copy()
+        #     self.nextpos[:3] = self.nextpos[:3] + xyz_delta * self.action_scale[0]
+        #     self.nextpos[3:] = (
+        #         Rotation.from_euler("xyz", action[3:6] * self.action_scale[1])
+        #         * Rotation.from_quat(self.currpos[3:])
+        #     ).as_quat()
 
         gripper_action = action[6] * self.action_scale[2]
 
@@ -387,35 +394,111 @@ class HIROLEnv(gym.Env):
             self.img_queue.put(display_images)
         return images
 
-    # def interpolate_move(self, goal: np.ndarray, timeout: float) -> None:
+    def interpolate_move(self, goal: np.ndarray, timeout: float) -> None:
+        """
+        Move the robot to the goal position using 5th-order polynomial interpolation.
         
-    #     if goal.shape == (6,):
-    #         goal = np.concatenate([goal[:3], euler_2_quat(goal[3:])])
-    #     # steps = int(timeout * self.hz)
-    #     self._update_currpos()
-    #     # path = np.linspace(self.currpos, goal, steps)
-    #     # for p in path:
-    #     self._send_pos_command(goal)
-    #     #     time.sleep(1 / self.hz)
-    #     # self.nextpos = p
-    #     self._update_currpos()
+        Args:
+            goal: Target pose (6D euler or 7D quaternion)
+            timeout: Time duration for the motion
+        """
+        if goal.shape == (6,):
+            goal = np.concatenate([goal[:3], euler_2_quat(goal[3:])])
+        
+        # Get current position
+        self._update_currpos()
+        start_pos = self.currpos[:3].copy()
+        start_quat = self.currpos[3:].copy()
+        
+        end_pos = goal[:3]
+        end_quat = goal[3:]
+        
+        # 5th-order polynomial coefficients for position
+        # Assuming zero initial and final velocity/acceleration
+        T = timeout
+        
+        # Control frequency for interpolation (match environment hz)
+        control_freq = self.hz
+        num_steps = int(T * control_freq)
+        
+        if num_steps < 2:
+            # If timeout too short, just send final command
+            self.robot.send_pos_command(goal)
+            time.sleep(timeout)
+            self.nextpos = goal
+            self._update_currpos()
+            return
+        
+        # Generate time points
+        t_points = np.linspace(0, T, num_steps)
+        
+        for i, t in enumerate(t_points):
+            # 5th-order polynomial: q(t) = a0 + a1*t + a2*t^2 + a3*t^3 + a4*t^4 + a5*t^5
+            # With boundary conditions: q(0)=q_start, q(T)=q_end, 
+            # q'(0)=0, q'(T)=0, q''(0)=0, q''(T)=0
+            
+            # Normalized time [0, 1]
+            s = t / T
+            
+            # 5th-order polynomial shape function
+            # This ensures smooth acceleration profile
+            h = 10*s**3 - 15*s**4 + 6*s**5
+            
+            # Interpolate position
+            interp_pos = start_pos + (end_pos - start_pos) * h
+            
+            # Spherical linear interpolation for quaternion
+            # Use scipy's Rotation for proper quaternion interpolation
+            r_start = Rotation.from_quat(start_quat)
+            r_end = Rotation.from_quat(end_quat)
+            
+            # Create interpolation path
+            key_rots = Rotation.concatenate([r_start, r_end])
+            key_times = [0, 1]
+            
+            # Interpolate rotation using Slerp
+            from scipy.spatial.transform import Slerp
+            slerp = Slerp(key_times, key_rots)
+            interp_rot = slerp(h)
+            interp_quat = interp_rot.as_quat()
+            
+            # Combine position and orientation
+            interp_pose = np.concatenate([interp_pos, interp_quat])
+            
+            # Send command
+            self.robot.send_pos_command(interp_pose)
+            
+            # Sleep to maintain control frequency
+            if i < num_steps - 1:  # Don't sleep after last command
+                time.sleep(1.0 / control_freq)
+        
+        # Update internal state
+        self.nextpos = goal
+        self._update_currpos()
 
-    def go_to_reset(self, joint_reset: bool = True) -> None:
+    def go_to_reset(self, joint_reset: bool = False) -> None:
         """
         The concrete steps to perform reset should be
         implemented each subclass for the specific task.
         Should override this method if custom reset procedure is needed.
         """
-        # Update current position
+        # Change to precision mode for reset
         self._update_currpos()
+        self._send_pos_command(self.currpos)
+        time.sleep(0.3)
+        
+        # Update compliance parameters to precision mode
+        if self.robot is not None:
+            self.robot.update_params(self.config.PRECISION_PARAM)
+        time.sleep(0.5)
         
         # Perform joint reset if needed
         if joint_reset:
             print("JOINT RESET - Moving to home position")
-            self.interface.joint_reset()
+            if self.robot is not None:
+                self.robot.joint_reset()  # Using SerlRobotInterface's joint_reset
             time.sleep(0.5)
-            self._update_currpos()  # Update position after joint reset
-
+        
         # Prepare reset pose
         if self.randomreset:  # randomize reset position in xy plane
             reset_pose = self.resetpos.copy()
@@ -429,24 +512,25 @@ class HIROLEnv(gym.Env):
             reset_pose[3:] = euler_2_quat(euler_random)
         else:
             reset_pose = self.resetpos.copy()
-
-        # Use smooth cartesian motion to move to reset position
-        print("Moving to reset position using smooth motion")
-        if hasattr(self.interface, 'move_to_cartesian_pose'):
-            # Use the new smooth motion method
-            self.interface.move_to_cartesian_pose(reset_pose, blocking=True)
-        else:
-            # Fallback to direct position command
-            self._send_pos_command(reset_pose)
-            time.sleep(1.0)  # Give more time for motion to complete
         
-        # Update compliance parameters if provided
-        if hasattr(self.config, 'COMPLIANCE_PARAM') and self.config.COMPLIANCE_PARAM:
-            self.interface.update_params(self.config.COMPLIANCE_PARAM)
+        # Move to reset position using smooth trajectory
+        up_pose = self.currpos.copy()
+        up_pose[:3] += np.array([0, 0, 0.1])  # Move up by 10cm
+        self.interpolate_move(up_pose, timeout=1.0)
+        time.sleep(0.1)
+        self.interpolate_move(reset_pose, timeout=1.0)
+        
+        # Change back to compliance mode
+        if self.robot is not None:
+            self.robot.update_params(self.config.COMPLIANCE_PARAM)
 
-    def reset(self, joint_reset: bool = True, **kwargs) -> Tuple[Dict, Dict]:
+    def reset(self, joint_reset: bool = False, **kwargs) -> Tuple[Dict, Dict]:
         """Reset the environment"""
         self.last_gripper_act = time.time()
+        
+        # Update compliance parameters
+        if self.robot is not None:
+            self.robot.update_params(self.config.COMPLIANCE_PARAM)
         
         if self.save_video:
             self.save_video_recording()
@@ -458,13 +542,40 @@ class HIROLEnv(gym.Env):
 
         self._recover()
         self.go_to_reset(joint_reset=joint_reset)
-        self._send_gripper_command(1)  # Open gripper during reset
         self._recover()
         self.curr_path_length = 0
 
         self._update_currpos()
+        
+        # Initialize ideal pose to actual reset pose
+        self.ideal_pose = self.currpos.copy()
+        
         obs = self._get_obs()
         self.terminate = False
+        
+        # Non-blocking wait for Enter key while allowing keyboard events to be processed
+        print("press enter to start episode...")
+        import sys, select
+        
+        # Use a flag to track if Enter was pressed
+        enter_pressed = False
+        
+        # Check for input with timeout to allow keyboard event processing
+        while not enter_pressed and not self.terminate:
+            # Check if input is available with 0.1 second timeout
+            if sys.stdin in select.select([sys.stdin], [], [], 0.1)[0]:
+                line = sys.stdin.readline()
+                if line:  # Enter was pressed
+                    enter_pressed = True
+                    break
+            
+            # Small sleep to prevent CPU spinning
+            time.sleep(0.01)
+            
+        _ = self.get_im()  # 丢弃这一帧
+        time.sleep(0.1)    # 给相机时间捕获新帧
+        # 现在获取真正的观察
+        obs = self._get_obs()
         return obs, {"succeed": False}
 
     def save_video_recording(self) -> None:
@@ -522,24 +633,44 @@ class HIROLEnv(gym.Env):
 
     def _recover(self) -> None:
         """Internal function to recover the robot from error state."""
-        if self.interface is not None:
-            self.interface.clear_errors()
+        if self.robot is not None:
+            self.robot.clear_errors()
 
     def _send_pos_command(self, pos: np.ndarray) -> None:
         """Internal function to send position command to the robot."""
-        if self.interface is not None:
+        if self.robot is not None:
             self._recover()
-            self.interface.send_pos_command(pos)
+            # Use servo mode for fast reactive control during steps
+            self.robot.send_pos_command(pos)
 
     def _send_gripper_command(self, pos: float, mode: str = "binary") -> None:
         """Internal function to send gripper command to the robot."""
-        if self.interface is not None:
-            self.interface.send_gripper_command(pos, mode=mode)
+        if self.robot is None:
+            return
+            
+        if mode == "binary":
+            current_gripper = self.curr_gripper_pos[0] if isinstance(self.curr_gripper_pos, np.ndarray) else self.curr_gripper_pos
+            if (pos <= -0.5) and (current_gripper > 0.5) and (time.time() - self.last_gripper_act > self.gripper_sleep):  # close gripper
+                print(f"[Gripper] Closing gripper (action={pos:.2f}, current={current_gripper:.2f})")
+                self.robot.close_gripper()
+                self.last_gripper_act = time.time()
+                time.sleep(self.gripper_sleep)
+            elif (pos >= 0.5) and (current_gripper < 0.5) and (time.time() - self.last_gripper_act > self.gripper_sleep):  # open gripper
+                print(f"[Gripper] Opening gripper (action={pos:.2f}, current={current_gripper:.2f})")
+                self.robot.open_gripper()
+                self.last_gripper_act = time.time()
+                time.sleep(self.gripper_sleep)
+            # Debug print to see what's happening
+            elif abs(pos) >= 0.5:
+                print(f"[Gripper] Action received but not executed: action={pos:.2f}, current={current_gripper:.2f}, time_since_last={time.time() - self.last_gripper_act:.2f}s")
+        else:
+            # Continuous mode
+            self.robot.send_gripper_command(pos, mode=mode)
 
     def _update_currpos(self) -> None:
         """Internal function to get the latest state of the robot and its gripper."""
-        if self.interface is not None:
-            state = self.interface.get_state()
+        if self.robot is not None:
+            state = self.robot.get_state()
             self.currpos = state["pose"]
             self.currvel = state["vel"]
             self.currforce = state["force"]
@@ -548,6 +679,10 @@ class HIROLEnv(gym.Env):
             self.currjacobian = state["jacobian"]
             self.q = state["q"]
             self.dq = state["dq"]
+
+    def update_currpos(self) -> None:
+        """Public version of _update_currpos for compatibility"""
+        self._update_currpos()
 
     def _get_obs(self) -> Dict:
         """Get observation dictionary"""
@@ -570,5 +705,5 @@ class HIROLEnv(gym.Env):
             self.img_queue.put(None)
             cv2.destroyAllWindows()
             self.displayer.join()
-        if self.interface is not None:
-            self.interface.close()
+        if self.robot is not None:
+            self.robot.close()

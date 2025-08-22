@@ -25,7 +25,7 @@ Edit `config.py` to modify task parameters:
 
 ```python
 # Robot connection
-ROBOT_IP = "192.168.3.102"  # FR3 robot IP
+ROBOT_IP = "192.168.1.206"  # FR3 robot IP
 
 # Task definition
 TARGET_POSE = np.array([0.5, 0.0, 0.3, -np.pi, 0, 0])  # Target position

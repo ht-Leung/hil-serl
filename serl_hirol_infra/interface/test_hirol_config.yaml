@@ -39,7 +39,7 @@ buffer_type: "buffer"  # Added missing field
 controller_config:
   ik:
     frame_name: "fr3_hand_tcp"
-    ik_type: "lm"  # Solver type: gaussian_newtown, dls, or lm
+    ik_type: "lm"  # Solver type: gaussian_newton, dls, or lm
     tolerance: 0.000001
     max_iteration: 500  # Note: max_iteration not max_iter
     damping: 0.01
