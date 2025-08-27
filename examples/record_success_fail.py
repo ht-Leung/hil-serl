@@ -6,6 +6,8 @@ import pickle as pkl
 import datetime
 from absl import app, flags
 from pynput import keyboard
+import signal
+import sys
 
 from experiments.mappings import CONFIG_MAPPING
 
@@ -25,14 +27,27 @@ def on_press(key):
 
 def main(_):
     global success_key
-    listener = keyboard.Listener(
-        on_press=on_press)
-    listener.start()
-    assert FLAGS.exp_name in CONFIG_MAPPING, 'Experiment folder not found.'
-    config = CONFIG_MAPPING[FLAGS.exp_name]()
-    env = config.get_environment(fake_env=False, save_video=False, classifier=False)
+    listener = None
+    env = None
+    pbar = None
+    cleanup_in_progress = False
+    
+    def signal_handler(signum, frame):
+        nonlocal cleanup_in_progress
+        if not cleanup_in_progress:
+            print("\n\n[INFO] Interrupt received. Cleaning up resources...")
+            cleanup_in_progress = True
+            raise KeyboardInterrupt
+    
+    signal.signal(signal.SIGINT, signal_handler)
+    signal.signal(signal.SIGTERM, signal_handler)
     
     try:
+        listener = keyboard.Listener(on_press=on_press)
+        listener.start()
+        assert FLAGS.exp_name in CONFIG_MAPPING, 'Experiment folder not found.'
+        config = CONFIG_MAPPING[FLAGS.exp_name]()
+        env = config.get_environment(fake_env=False, save_video=False, classifier=False)
 
         obs, _ = env.reset()
         successes = []
@@ -88,13 +103,32 @@ def main(_):
         
     finally:
         # Cleanup
-        pbar.close()
-        listener.stop()
+        print("\n[INFO] Starting cleanup...")
         
-        # Close environment (which will close SpaceMouse)
-        if hasattr(env, 'close'):
-            env.close()
-        print("\nCleanup completed successfully.")
+        # Close progress bar
+        if pbar is not None:
+            try:
+                pbar.close()
+            except Exception as e:
+                print(f"[WARNING] Error closing progress bar: {e}")
+        
+        # Stop keyboard listener
+        if listener is not None:
+            try:
+                listener.stop()
+            except Exception as e:
+                print(f"[WARNING] Error stopping listener: {e}")
+        
+        # Close environment (which will close SpaceMouse and cameras)
+        if env is not None:
+            try:
+                if hasattr(env, 'close'):
+                    env.close()
+                    print("[INFO] Environment closed successfully")
+            except Exception as e:
+                print(f"[WARNING] Error closing environment: {e}")
+        
+        print("[INFO] Cleanup completed successfully.")
         
 if __name__ == "__main__":
     app.run(main)

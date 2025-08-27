@@ -38,17 +38,30 @@ class ImageDisplayer(threading.Thread):
         self.name = name
 
     def run(self):
+        window_created = False
         while True:
             img_array = self.queue.get()  # retrieve an image from the queue
             if img_array is None:  # None is our signal to exit
+                # Clean up the window only if it was created
+                if window_created:
+                    try:
+                        cv2.destroyWindow(self.name)
+                        cv2.waitKey(1)
+                    except:
+                        pass  # Ignore if window doesn't exist
                 break
 
-            frame = np.concatenate(
-                [cv2.resize(v, (128, 128)) for k, v in img_array.items() if "full" not in k], axis=1
-            )
+            try:
+                frame = np.concatenate(
+                    [cv2.resize(v, (128, 128)) for k, v in img_array.items() if "full" not in k], axis=1
+                )
 
-            cv2.imshow(self.name, frame)
-            cv2.waitKey(1)
+                cv2.imshow(self.name, frame)
+                cv2.waitKey(1)
+                window_created = True  # Mark that window has been created
+            except Exception as e:
+                # Ignore display errors but continue running
+                pass
 
 
 
@@ -82,10 +95,10 @@ class DefaultEnvConfig:
     
     # Compliance parameters for smooth motion
     COMPLIANCE_PARAM: ComplianceParams = ComplianceParams(
-        translational_stiffness=1500,
-        translational_damping=80,
-        rotational_stiffness=100,
-        rotational_damping=10,
+        translational_stiffness=2000,
+        translational_damping=89,
+        rotational_stiffness=150,
+        rotational_damping=7,
     )
     
     # Precision parameters for reset
@@ -144,8 +157,9 @@ class HIROLEnv(gym.Env):
         self.max_episode_length = self.config.MAX_EPISODE_LENGTH
         self.display_image = self.config.DISPLAY_IMAGE
         
-        # Initialize cleanup flag
+        # Initialize cleanup flags
         self._closing = False
+        self._signal_handling = False
         self.gripper_sleep = self.config.GRIPPER_SLEEP
         
         # Control parameters
@@ -241,18 +255,10 @@ class HIROLEnv(gym.Env):
                         self.terminate = True
                     elif hasattr(key, 'char') and key.char == 'g':
                         print("\n[Manual Recovery] 'g' key pressed - Recovering gripper...")
-                        if hasattr(self.robot, 'recover_gripper'):
-                            success = self.robot.recover_gripper()
-                            if success:
-                                print("[Manual Recovery] Gripper recovery successful via homing")
-                                self._update_currpos()
-                                
-                            else:
-                                print("[Manual Recovery] Gripper recovery failed, trying error  clear...")
-                                self._recover()
-                        else:
-                            print("[Manual Recovery] Using general error recovery")
-                            self._recover()
+                        # Only recover gripper, not the whole robot
+                        success = self._recover_gripper()
+                        if success:
+                            self._update_currpos()
                         print("[Manual Recovery] Recovery attempt completed\n")
                 except Exception as e:
                     print(f"[Manual Recovery] Error handling key press: {e}")
@@ -350,7 +356,8 @@ class HIROLEnv(gym.Env):
 
         self._update_currpos()
         ob = self._get_obs()
-        reward = self.compute_reward(ob)
+        # reward = self.compute_reward(ob)
+        reward = 0
         done = self.curr_path_length >= self.max_episode_length or reward or self.terminate
         return ob, int(reward), done, False, {"succeed": reward}
 
@@ -525,14 +532,20 @@ class HIROLEnv(gym.Env):
         up_pose[:3] += np.array([0, 0, 0.1])  # Move up by 10cm
         self.interpolate_move(up_pose, timeout=1.0)
         time.sleep(0.1)
-        self.interpolate_move(reset_pose, timeout=1.0)
+        self.interpolate_move(reset_pose, timeout=3.0)
         
         # Change back to compliance mode
         if self.robot is not None:
             self.robot.update_params(self.config.COMPLIANCE_PARAM)
 
     def reset(self, joint_reset: bool = False, **kwargs) -> Tuple[Dict, Dict]:
-        """Reset the environment"""
+        """
+        Reset the environment
+        
+        Args:
+            joint_reset: Whether to reset joints to home position
+            **kwargs: Additional arguments
+        """
         self.last_gripper_act = time.time()
         
         # Update compliance parameters
@@ -547,12 +560,18 @@ class HIROLEnv(gym.Env):
             self.cycle_count = 0
             joint_reset = True
 
+        
         self._recover()
         self.go_to_reset(joint_reset=joint_reset)
         self._recover()
         self.curr_path_length = 0
-
+        
         self._update_currpos()
+        
+        # Hook for wrapper to perform gripper operations before waiting for Enter
+        # This maintains decoupling - base env doesn't know about gripper specifics
+        if hasattr(self, '_pre_enter_hook') and callable(self._pre_enter_hook):
+            self._pre_enter_hook()
         
         # Initialize ideal pose to actual reset pose
         self.ideal_pose = self.currpos.copy()
@@ -589,13 +608,15 @@ class HIROLEnv(gym.Env):
         """Save recorded video frames to disk"""
         try:
             if len(self.recording_frames):
-                if not os.path.exists('./videos'):
-                    os.makedirs('./videos')
+                # Use absolute path for video storage
+                video_dir = '/data/hilserl/video'
+                if not os.path.exists(video_dir):
+                    os.makedirs(video_dir, exist_ok=True)
                 
                 timestamp = datetime.now().strftime("%Y-%m-%d_%H-%M-%S")
                 
                 for camera_key in self.recording_frames[0].keys():
-                    video_path = f'./videos/hirol_{camera_key}_{timestamp}.mp4'
+                    video_path = os.path.join(video_dir, f'hirol_{camera_key}_{timestamp}.mp4')
                     
                     # Get the shape of the first frame for this camera
                     first_frame = self.recording_frames[0][camera_key]
@@ -632,16 +653,36 @@ class HIROLEnv(gym.Env):
 
     def close_cameras(self) -> None:
         """Close all cameras."""
-        try:
-            for cap in self.cap.values():
-                cap.close()
-        except Exception as e:
-            print(f"Failed to close cameras: {e}")
+        if hasattr(self, 'cap') and self.cap is not None:
+            try:
+                for cap in self.cap.values():
+                    try:
+                        cap.close()
+                    except Exception as e:
+                        print(f"Failed to close individual camera: {e}")
+                self.cap = None  # Clear reference after closing
+            except Exception as e:
+                print(f"Failed to close cameras: {e}")
 
     def _recover(self) -> None:
         """Internal function to recover the robot from error state."""
         if self.robot is not None:
             self.robot.clear_errors()
+    
+    def _recover_gripper(self) -> bool:
+        """Internal function to recover gripper from error state."""
+        if self.robot is not None and hasattr(self.robot, 'recover_gripper'):
+            try:
+                success = self.robot.recover_gripper()
+                if success:
+                    print("[Gripper Recovery] Gripper recovery successful")
+                else:
+                    print("[Gripper Recovery] Gripper recovery failed, may need manual intervention")
+                return success
+            except Exception as e:
+                print(f"[Gripper Recovery] Error during gripper recovery: {e}")
+                return False
+        return False
 
     def _send_pos_command(self, pos: np.ndarray) -> None:
         """Internal function to send position command to the robot."""
@@ -657,19 +698,23 @@ class HIROLEnv(gym.Env):
             
         if mode == "binary":
             current_gripper = self.curr_gripper_pos[0] if isinstance(self.curr_gripper_pos, np.ndarray) else self.curr_gripper_pos
-            if (pos <= -0.5) and (current_gripper > 0.5) and (time.time() - self.last_gripper_act > self.gripper_sleep):  # close gripper
+            if (pos <= -0.5) and (current_gripper > 0.65) and (time.time() - self.last_gripper_act > self.gripper_sleep):  # close gripper
                 print(f"[Gripper] Closing gripper (action={pos:.2f}, current={current_gripper:.2f})")
                 self.robot.close_gripper()
                 self.last_gripper_act = time.time()
-                time.sleep(self.gripper_sleep)
-            elif (pos >= 0.5) and (current_gripper < 0.5) and (time.time() - self.last_gripper_act > self.gripper_sleep):  # open gripper
+                # time.sleep(self.gripper_sleep)
+                # Force update gripper state after command
+                self._update_currpos()
+            elif (pos >= 0.5) and (current_gripper < 0.65) and (time.time() - self.last_gripper_act > self.gripper_sleep):  # open gripper
                 print(f"[Gripper] Opening gripper (action={pos:.2f}, current={current_gripper:.2f})")
                 self.robot.open_gripper()
                 self.last_gripper_act = time.time()
-                time.sleep(self.gripper_sleep)
-            # Debug print to see what's happening
-            elif abs(pos) >= 0.5:
-                print(f"[Gripper] Action received but not executed: action={pos:.2f}, current={current_gripper:.2f}, time_since_last={time.time() - self.last_gripper_act:.2f}s")
+                # time.sleep(self.gripper_sleep)
+                # Force update gripper state after command  
+                self._update_currpos()
+            # Debug print to see what's happening (commented out to reduce spam)
+            # elif abs(pos) >= 0.5:
+            #     print(f"[Gripper] Action received but not executed: action={pos:.2f}, current={current_gripper:.2f}, time_since_last={time.time() - self.last_gripper_act:.2f}s")
         else:
             # Continuous mode
             self.robot.send_gripper_command(pos, mode=mode)
@@ -719,10 +764,32 @@ class HIROLEnv(gym.Env):
     
     def _signal_handler(self, signum, frame) -> None:
         """Handle interrupt signals gracefully"""
+        # Prevent handling the same signal multiple times
+        if hasattr(self, '_signal_handling') and self._signal_handling:
+            return
+        self._signal_handling = True
+        
         print("\n[HIROLEnv] Received interrupt signal, cleaning up...")
-        self.close()
-        # Exit cleanly without raising KeyboardInterrupt
-        sys.exit(0)
+        
+        # Close environment resources first
+        try:
+            self.close()
+        except Exception as e:
+            print(f"[HIROLEnv] Error during cleanup: {e}")
+        
+        # Exit with proper cleanup instead of raising KeyboardInterrupt
+        # This prevents zombie processes
+        import os
+        import sys
+        sys.stdout.flush()
+        sys.stderr.flush()
+        
+        # Terminate all child threads and processes
+        if hasattr(os, '_exit'):
+            # Force exit to ensure all resources are freed
+            os._exit(0)
+        else:
+            sys.exit(0)
 
     def close(self) -> None:
         """Clean up resources"""
@@ -740,21 +807,37 @@ class HIROLEnv(gym.Env):
             except:
                 pass
         
-        # Close cameras
+        # Close cameras with timeout protection
         try:
-            self.close_cameras()
+            if hasattr(self, 'cap') and self.cap is not None:
+                # Give cameras a chance to close gracefully
+                self.close_cameras()
         except Exception as e:
             print(f"[HIROLEnv] Error closing cameras: {e}")
         
         # Stop image display thread
         if hasattr(self, 'display_image') and self.display_image:
             try:
-                self.img_queue.put(None)
+                # Signal the display thread to stop
+                if hasattr(self, 'img_queue'):
+                    self.img_queue.put(None)
+                
+                # Force close all OpenCV windows
                 cv2.destroyAllWindows()
+                # Wait for OpenCV to process the window closure
+                for _ in range(5):
+                    cv2.waitKey(1)
+                
+                # Wait for displayer thread to finish
                 if hasattr(self, 'displayer'):
                     self.displayer.join(timeout=1.0)
-            except:
-                pass
+            except Exception as e:
+                print(f"[HIROLEnv] Error stopping display: {e}")
+                # Force destroy windows even if error occurs
+                try:
+                    cv2.destroyAllWindows()
+                except:
+                    pass
         
         # Close robot interface
         if hasattr(self, 'robot') and self.robot is not None:

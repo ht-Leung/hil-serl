@@ -37,15 +37,17 @@ class EnvConfig(DefaultEnvConfig):
         "side": {"serial_number": "317422071787"},
     }
     IMAGE_CROP = {
-        # "wrist": lambda img: img[:, 250:],
-        # "side": lambda img: img[100:500, 150:1100],
+        "wrist_1": lambda img: img[:,:],
+        "front": lambda img: img[90:450, 140:520],
+        "side": lambda img: img[130:450, 180:640],
+        
     }
     
     # Target pose for reaching (x, y, z, roll, pitch, yaw)
     # TARGET_POSE = np.array([0.5, 0.1, 0.3, -np.pi, 0, 0])
     
     # Reset pose - slightly offset from target
-    RESET_POSE = np.array([0.5, 0.0, 0.4, -np.pi, 0, 0])
+    RESET_POSE = np.array([0.5, 0.1, 0.32, -np.pi, 0, 0])
     
     # Reward threshold - 2cm for position, 0.1 rad for orientation
     REWARD_THRESHOLD = np.array([0.02, 0.02, 0.02, 0.1, 0.1, 0.1])
@@ -53,15 +55,10 @@ class EnvConfig(DefaultEnvConfig):
     # Action scale: [position_scale, rotation_scale, gripper_scale]
     # Optimized for SpaceMouse control (max output ~0.26 after scaling by 350)
     # Position: 0.26 * 0.02 = 5.2mm per frame, at 10Hz = 52mm/s max velocity
-    ACTION_SCALE = np.array([0.02, 0.02, 1])  # Slightly increased for responsiveness
+    # Rotation: 0.26 * 0.25 = 0.065 rad = 3.7 degrees per frame
+    ACTION_SCALE = np.array([0.02, 0.06, 1])  # Increased rotation scale for better responsiveness
     
-    # Critical Damped Tracker parameters (二阶临界阻尼跟踪器)
-    # Natural frequency (rad/s) - controls tracking responsiveness
-    # Lower values (15-20): More compliant, slower response
-    # Medium values (20-30): Balanced (default 25)
-    # Higher values (30-40): Faster response, stiffer
-    # Formula: settling_time ≈ 4.6 / omega_n
-    # TRACKER_OMEGA_N = 25.0  # Default: 0.18s settling time
+
       
     # Enable random reset for diversity
     RANDOM_RESET = False
@@ -69,13 +66,13 @@ class EnvConfig(DefaultEnvConfig):
     RANDOM_RZ_RANGE = 0.1
     
     # Workspace limits
-    ABS_POSE_LIMIT_HIGH = np.array([0.7, 0.2, 0.55, np.pi+0.5, 0.5, 0.5])
-    ABS_POSE_LIMIT_LOW = np.array([0.4, -0.2, 0.2, np.pi-0.5, -0.5, -0.5])
+    ABS_POSE_LIMIT_HIGH = np.array([0.7, 0.24, 0.45, np.pi, 0.5, +0.3*np.pi])
+    ABS_POSE_LIMIT_LOW = np.array([0.30, 0, 0.22, np.pi, -0.5, -0.3*np.pi])
     
     # Display
     DISPLAY_IMAGE = True
     GRIPPER_SLEEP = 0.0
-    MAX_EPISODE_LENGTH = 100
+    MAX_EPISODE_LENGTH = 120
     # JOINT_RESET_PERIOD = 100  # Reset joints every 20 episodes
 
 
@@ -83,9 +80,12 @@ class TrainConfig(DefaultTrainingConfig):
     """Training configuration for HIROL Unified task"""
     
     # Image and proprioception keys
-    image_keys = ["side", "wrist_1"]
-    classifier_keys = ["side" ,"wrist_1", "front"
-                       ]  # Use both cameras for classifier
+    image_keys = ["side", "wrist_1","front"]
+    classifier_keys = [
+                        # "side" ,
+                       "wrist_1",
+                       "front"
+                       ] 
     proprio_keys = ["tcp_pose", "tcp_vel", "tcp_force", "tcp_torque", "gripper_pose"]
     
     # Training parameters
@@ -164,7 +164,7 @@ class TrainConfig(DefaultTrainingConfig):
                     logit = logit.squeeze()
                     if logit.shape:  # Still has dimensions
                         logit = logit[0]
-                return int(sigmoid(logit) > 0.75)
+                return int(sigmoid(logit) > 0.7) # 0.65/0.75
 
 
 
