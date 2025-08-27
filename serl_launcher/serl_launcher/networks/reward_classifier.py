@@ -50,21 +50,20 @@ def create_classifier(
     image_keys: List[str],
     n_way: int = 2,
 ):
-    # Create a separate pretrained encoder for each image key to avoid sharing issues
-    encoders = {}
-    for image_key in image_keys:
-        # Create a new pretrained_encoder instance for each view
-        pretrained_encoder = resnetv1_configs["resnetv1-10-frozen"](
-            pre_pooling=True,
-            name="pretrained_encoder",
-        )
-        encoders[image_key] = PreTrainedResNetEncoder(
+    pretrained_encoder = resnetv1_configs["resnetv1-10-frozen"](
+        pre_pooling=True,
+        name="pretrained_encoder",
+    )
+    encoders = {
+        image_key: PreTrainedResNetEncoder(
             pooling_method="spatial_learned_embeddings",
             num_spatial_blocks=8,
             bottleneck_dim=256,
             pretrained_encoder=pretrained_encoder,
             name=f"encoder_{image_key}",
         )
+        for image_key in image_keys
+    }
     encoder_def = EncodingWrapper(
         encoder=encoders,
         use_proprio=False,
@@ -121,30 +120,15 @@ def create_classifier(
     )
     new_params = classifier.params
     for image_key in image_keys:
-        encoder_name = f"encoder_{image_key}"
-        print(f"\nProcessing {encoder_name}...")
-        
-        if encoder_name not in new_params["encoder_def"]:
-            print(f"  WARNING: {encoder_name} not found in params!")
-            continue
-            
-        if "pretrained_encoder" in new_params["encoder_def"][encoder_name]:
-            keys_to_replace = new_params["encoder_def"][encoder_name]["pretrained_encoder"].keys()
-            print(f"  Found pretrained_encoder with {len(keys_to_replace)} keys")
-            
-            replaced_count = 0
-            for k in keys_to_replace:
+        if "pretrained_encoder" in new_params["encoder_def"][f"encoder_{image_key}"]:
+            for k in new_params["encoder_def"][f"encoder_{image_key}"][
+                "pretrained_encoder"
+            ]:
                 if k in encoder_params:
-                    new_params["encoder_def"][encoder_name][
+                    new_params["encoder_def"][f"encoder_{image_key}"][
                         "pretrained_encoder"
                     ][k] = encoder_params[k]
-                    print(f"  replaced {k} in {encoder_name}")
-                    replaced_count += 1
-            
-            if replaced_count == 0:
-                print(f"  WARNING: No keys were replaced for {encoder_name}!")
-        else:
-            print(f"  No pretrained_encoder found in {encoder_name}")
+                    print(f"replaced {k} in encoder_{image_key}")
 
     classifier = classifier.replace(params=new_params)
     return classifier
