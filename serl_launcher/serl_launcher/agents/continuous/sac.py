@@ -438,7 +438,6 @@ class SACAgent(flax.struct.PyTreeNode):
         actions: jnp.ndarray,
         # Model architecture
         encoder_type: str = "resnet-pretrained",
-        encoder_def: Optional[nn.Module] = None,  # 自定义编码器
         use_proprio: bool = False,
         critic_network_kwargs: dict = {
             "hidden_dims": [256, 256],
@@ -464,53 +463,47 @@ class SACAgent(flax.struct.PyTreeNode):
         policy_network_kwargs["activate_final"] = True
         critic_network_kwargs["activate_final"] = True
 
-        # 使用自定义编码器或创建默认编码器
-        if encoder_def is not None:
-            # 使用提供的自定义编码器
-            pass
-        else:
-            # 创建默认ResNet编码器
-            if encoder_type == "resnet":
-                from serl_launcher.vision.resnet_v1 import resnetv1_configs
+        if encoder_type == "resnet":
+            from serl_launcher.vision.resnet_v1 import resnetv1_configs
 
-                encoders = {
-                    image_key: resnetv1_configs["resnetv1-10"](
-                        pooling_method="spatial_learned_embeddings",
-                        num_spatial_blocks=8,
-                        bottleneck_dim=256,
-                        name=f"encoder_{image_key}",
-                    )
-                    for image_key in image_keys
-                }
-            elif encoder_type == "resnet-pretrained":
-                from serl_launcher.vision.resnet_v1 import (
-                    PreTrainedResNetEncoder,
-                    resnetv1_configs,
+            encoders = {
+                image_key: resnetv1_configs["resnetv1-10"](
+                    pooling_method="spatial_learned_embeddings",
+                    num_spatial_blocks=8,
+                    bottleneck_dim=256,
+                    name=f"encoder_{image_key}",
                 )
-
-                pretrained_encoder = resnetv1_configs["resnetv1-10-frozen"](
-                    pre_pooling=True,
-                    name="pretrained_encoder",
-                )
-                encoders = {
-                    image_key: PreTrainedResNetEncoder(
-                        pooling_method="spatial_learned_embeddings",
-                        num_spatial_blocks=8,
-                        bottleneck_dim=256,
-                        pretrained_encoder=pretrained_encoder,
-                        name=f"encoder_{image_key}",
-                    )
-                    for image_key in image_keys
-                }
-            else:
-                raise NotImplementedError(f"Unknown encoder type: {encoder_type}")
-
-            encoder_def = EncodingWrapper(
-                encoder=encoders,
-                use_proprio=use_proprio,
-                enable_stacking=True,
-                image_keys=image_keys,
+                for image_key in image_keys
+            }
+        elif encoder_type == "resnet-pretrained":
+            from serl_launcher.vision.resnet_v1 import (
+                PreTrainedResNetEncoder,
+                resnetv1_configs,
             )
+
+            pretrained_encoder = resnetv1_configs["resnetv1-10-frozen"](
+                pre_pooling=True,
+                name="pretrained_encoder",
+            )
+            encoders = {
+                image_key: PreTrainedResNetEncoder(
+                    pooling_method="spatial_learned_embeddings",
+                    num_spatial_blocks=8,
+                    bottleneck_dim=256,
+                    pretrained_encoder=pretrained_encoder,
+                    name=f"encoder_{image_key}",
+                )
+                for image_key in image_keys
+            }
+        else:
+            raise NotImplementedError(f"Unknown encoder type: {encoder_type}")
+
+        encoder_def = EncodingWrapper(
+            encoder=encoders,
+            use_proprio=use_proprio,
+            enable_stacking=True,
+            image_keys=image_keys,
+        )
 
         encoders = {
             "critic": encoder_def,
