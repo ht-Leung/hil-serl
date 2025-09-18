@@ -319,7 +319,7 @@ class SpacemouseIntervention(gym.ActionWrapper):
             elif self.right:  # open gripper
                 self.gripper_state = 1.0
                 intervened = True
-            
+
             # Always use the current gripper state
             gripper_action = np.array([self.gripper_state])
             #______

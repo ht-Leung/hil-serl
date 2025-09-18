@@ -155,6 +155,19 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng):
         already_intervened = False
         intervention_count = 0
         intervention_steps = 0
+        
+        # Metrics tracking for Figure 4
+        training_start_time = time.time()  # Track wall-clock time from training start
+        episode_count = 0
+        success_history = []  # Store last 20 episodes
+        autonomous_success_history = []  # Store last 20 episodes for autonomous success
+        assisted_success_history = []  # Store last 20 episodes for assisted success
+        cycle_time_history = []  # Store last 20 episodes - all episodes
+        autonomous_cycle_time_history = []  # Store last 20 episodes - autonomous only
+        assisted_cycle_time_history = []  # Store last 20 episodes - with intervention  
+        intervention_rate_history = []  # Store last 20 episodes
+        episode_start_time = time.time()
+        episode_steps = 0
 
         pbar = tqdm.tqdm(range(start_step, config.max_steps), dynamic_ncols=True)
         for step in pbar:
@@ -175,6 +188,7 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng):
             # Step environment
             with timer.context("step_env"):
                 next_obs, reward, done, truncated, info = env.step(actions)
+                episode_steps += 1
                 if "left" in info:
                     info.pop("left")
                 if "right" in info:
@@ -209,14 +223,89 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng):
 
                 obs = next_obs
                 if done or truncated:
+                    episode_count += 1
+                    
+                    # Calculate metrics for this episode
+                    cycle_time = time.time() - episode_start_time
+                    intervention_rate = intervention_steps / max(episode_steps, 1)
+                    # Check success from episode info - RecordEpisodeStatistics stores cumulative reward in "r"
+                    episode_reward = info.get("episode", {}).get("r", 0)
+                    success = episode_reward > 0
+                    
+                    # Calculate different types of success
+                    autonomous_success = success and (intervention_steps == 0)  # Completely autonomous success
+                    assisted_success = success and (intervention_steps > 0)      # Success with human assistance
+                    
+                    # Update history (keep last 20 episodes)
+                    success_history.append(float(success))
+                    autonomous_success_history.append(float(autonomous_success))
+                    assisted_success_history.append(float(assisted_success))
+                    cycle_time_history.append(cycle_time)
+                    intervention_rate_history.append(intervention_rate)
+                    
+                    # Record cycle time by intervention type
+                    if intervention_steps == 0:
+                        autonomous_cycle_time_history.append(cycle_time)
+                    else:
+                        assisted_cycle_time_history.append(cycle_time)
+                    
+                    # Maintain history size (keep last 20 episodes)
+                    if len(success_history) > 20:
+                        success_history.pop(0)
+                        autonomous_success_history.pop(0)
+                        assisted_success_history.pop(0)
+                        cycle_time_history.pop(0)
+                        intervention_rate_history.pop(0)
+                    
+                    if len(autonomous_cycle_time_history) > 20:
+                        autonomous_cycle_time_history.pop(0)
+                    if len(assisted_cycle_time_history) > 20:
+                        assisted_cycle_time_history.pop(0)
+                    
+                    # Calculate running averages
+                    avg_success_rate = np.mean(success_history) if success_history else 0.0
+                    avg_autonomous_success_rate = np.mean(autonomous_success_history) if autonomous_success_history else 0.0
+                    avg_assisted_success_rate = np.mean(assisted_success_history) if assisted_success_history else 0.0
+                    avg_cycle_time = np.mean(cycle_time_history) if cycle_time_history else 0.0
+                    avg_autonomous_cycle_time = np.mean(autonomous_cycle_time_history) if autonomous_cycle_time_history else 0.0
+                    avg_assisted_cycle_time = np.mean(assisted_cycle_time_history) if assisted_cycle_time_history else 0.0
+                    avg_intervention_rate = np.mean(intervention_rate_history) if intervention_rate_history else 0.0
+                    
+                    # Calculate training time in minutes
+                    training_time_minutes = (time.time() - training_start_time) / 60.0
+                    
+                    # Add metrics to info
                     info["episode"]["intervention_count"] = intervention_count
                     info["episode"]["intervention_steps"] = intervention_steps
+                    info["episode"]["intervention_rate"] = intervention_rate
+                    info["episode"]["cycle_time"] = cycle_time
+                    info["episode"]["success"] = float(success)
+                    info["episode"]["autonomous_success"] = float(autonomous_success)
+                    info["episode"]["assisted_success"] = float(assisted_success)
+                    
+                    # Add Figure 4 metrics with training time
+                    info["figure4_metrics"] = {
+                        "success_rate_avg20": avg_success_rate,
+                        "autonomous_success_rate_avg20": avg_autonomous_success_rate,
+                        "assisted_success_rate_avg20": avg_assisted_success_rate,
+                        "cycle_time_avg20": avg_cycle_time,
+                        "autonomous_cycle_time_avg20": avg_autonomous_cycle_time,
+                        "assisted_cycle_time_avg20": avg_assisted_cycle_time,
+                        "intervention_rate_avg20": avg_intervention_rate,
+                        "training_time_minutes": training_time_minutes,
+                        "episode_count": episode_count,
+                    }
+                    
                     stats = {"environment": info}  # send stats to the learner to log
                     client.request("send-stats", stats)
-                    pbar.set_description(f"last return: {running_return}")
+                    pbar.set_description(f"return: {running_return:.1f} | auto: {avg_autonomous_success_rate:.0%} | total: {avg_success_rate:.0%} | int: {avg_intervention_rate:.0%} | t: {training_time_minutes:.1f}m")
+                    
+                    # Reset for next episode
                     running_return = 0.0
                     intervention_count = 0
                     intervention_steps = 0
+                    episode_steps = 0
+                    episode_start_time = time.time()
                     already_intervened = False
                     client.update()
                     obs, _ = env.reset()
@@ -302,7 +391,31 @@ def learner(rng, agent, replay_buffer, demo_buffer, wandb_logger=None):
             """Callback for when server receives stats request."""
             assert type == "send-stats", f"Invalid request type: {type}"
             if wandb_logger is not None:
-                wandb_logger.log(payload, step=step)
+                # Check if payload contains figure4_metrics with training time
+                if ("environment" in payload and 
+                    "figure4_metrics" in payload["environment"] and
+                    "training_time_minutes" in payload["environment"]["figure4_metrics"]):
+                    
+                    # Record training time as independent metric (with training step)
+                    time_minutes = payload["environment"]["figure4_metrics"]["training_time_minutes"]
+                    wandb_logger.log({"training_time_minutes": time_minutes}, step=step)
+                    
+                    # Log figure4_metrics (will use training_time_minutes as x-axis via define_metric)
+                    figure4_data = {"figure4_metrics/" + k: v for k, v in payload["environment"]["figure4_metrics"].items()}
+                    wandb_logger.log(figure4_data, step=step)
+                    
+                    # Log other environment metrics with regular step-based x-axis
+                    other_env_data = {k: v for k, v in payload["environment"].items() if k != "figure4_metrics"}
+                    if other_env_data:
+                        wandb_logger.log({"environment": other_env_data}, step=step)
+                        
+                    # Log any non-environment data with regular step-based x-axis
+                    other_data = {k: v for k, v in payload.items() if k != "environment"}
+                    if other_data:
+                        wandb_logger.log(other_data, step=step)
+                else:
+                    # Regular logging with training step x-axis
+                    wandb_logger.log(payload, step=step)
             return {}  # not expecting a response
 
         # Create server

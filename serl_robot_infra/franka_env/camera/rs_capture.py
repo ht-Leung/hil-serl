@@ -28,6 +28,12 @@ class RSCapture:
         align_to = rs.stream.color
         self.align = rs.align(align_to)
 
+        # Store camera intrinsics for point cloud conversion
+        self.intrinsics = None
+        self.depth_scale = None
+        if self.depth:
+            self._update_intrinsics()
+
     def read(self):
         frames = self.pipe.wait_for_frames()
         aligned_frames = self.align.process(frames)
@@ -44,6 +50,30 @@ class RSCapture:
                 return True, image
         else:
             return False, None
+
+    def _update_intrinsics(self):
+        """Update camera intrinsics from the depth stream"""
+        depth_stream = self.profile.get_stream(rs.stream.depth)
+        depth_intrinsics = depth_stream.as_video_stream_profile().get_intrinsics()
+
+        # Get depth sensor to extract depth scale
+        depth_sensor = self.profile.get_device().first_depth_sensor()
+        self.depth_scale = depth_sensor.get_depth_scale()
+
+        # Store intrinsics
+        self.intrinsics = {
+            'fx': depth_intrinsics.fx,
+            'fy': depth_intrinsics.fy,
+            'cx': depth_intrinsics.ppx,
+            'cy': depth_intrinsics.ppy,
+            'width': depth_intrinsics.width,
+            'height': depth_intrinsics.height,
+            'depth_scale': self.depth_scale
+        }
+
+    def get_intrinsics(self):
+        """Get camera intrinsics for point cloud conversion"""
+        return self.intrinsics
 
     def close(self):
         self.pipe.stop()

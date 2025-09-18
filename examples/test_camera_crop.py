@@ -11,14 +11,14 @@ from collections import OrderedDict
 CAMERAS = {
     "wrist_1": {"serial_number": "332322073603"},
     "front": {"serial_number": "244222075350"},
-    "side": {"serial_number": "317422071787"},
+    "side": {"serial_number": "243122071795"},
 }
 
 # Initialize crop parameters (y_start, y_end, x_start, x_end)
 CROP_PARAMS = {
     "wrist_1": [0, 480, 0, 640],  # Full image initially
-    "front": [0, 480, 0, 640],
-    "side": [0, 480, 0, 640],
+    "front": lambda img: img[0:480, 90:640],
+    "side": lambda img: img[40:410, 250:640],
 }
 
 # Adjustment step size

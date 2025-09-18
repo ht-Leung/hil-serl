@@ -16,7 +16,7 @@ class RSCapture:
         except:
             pass
 
-    def __init__(self, name, serial_number, dim=(640, 480), fps=15, depth=False, exposure=40000):
+    def __init__(self, name, serial_number, dim=(640, 480), fps=30, depth=False, exposure=40000):
         self.name = name
         self.serial_number = serial_number
         self.depth = depth
@@ -59,6 +59,30 @@ class RSCapture:
         align_to = rs.stream.color
         self.align = rs.align(align_to)
 
+        # Store camera intrinsics for point cloud conversion
+        color_stream = self.profile.get_stream(rs.stream.color)
+        intrinsics = color_stream.as_video_stream_profile().get_intrinsics()
+
+        # Get depth scale if depth is enabled
+        depth_scale = 0.001  # default value
+        if self.depth:
+            depth_sensor = self.profile.get_device().first_depth_sensor()
+            depth_scale = depth_sensor.get_depth_scale()
+
+        self.intrinsics = {
+            'fx': intrinsics.fx,
+            'fy': intrinsics.fy,
+            'cx': intrinsics.ppx,
+            'cy': intrinsics.ppy,
+            'width': intrinsics.width,
+            'height': intrinsics.height,
+            'depth_scale': depth_scale
+        }
+
+    def get_intrinsics(self):
+        """Get camera intrinsic parameters"""
+        return self.intrinsics
+
     def read(self):
         frames = self.pipe.wait_for_frames()
         aligned_frames = self.align.process(frames)
@@ -69,7 +93,12 @@ class RSCapture:
         if color_frame.is_video_frame():
             image = np.asarray(color_frame.get_data())
             if self.depth and depth_frame.is_depth_frame():
-                depth = np.expand_dims(np.asarray(depth_frame.get_data()), axis=2)
+                # Convert raw depth to meters using depth scale
+                raw_depth = np.asarray(depth_frame.get_data())
+                depth_meters = raw_depth * self.intrinsics['depth_scale']
+
+                # Store depth in meters for DepthToPointCloud compatibility
+                depth = np.expand_dims(depth_meters, axis=2)
                 return True, np.concatenate((image, depth), axis=-1)
             else:
                 return True, image

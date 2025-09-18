@@ -31,16 +31,21 @@ from factory.tasks.inferences_tasks.serl.serl_robot_interface import SerlRobotIn
 
 class ImageDisplayer(threading.Thread):
     """Thread for displaying images in a separate window"""
-    def __init__(self, queue, name):
+    def __init__(self, queue_obj, name):
         threading.Thread.__init__(self)
-        self.queue = queue
+        self.queue = queue_obj
         self.daemon = True  # make this a daemon thread
         self.name = name
 
     def run(self):
         window_created = False
         while True:
-            img_array = self.queue.get()  # retrieve an image from the queue
+            try:
+                # Use timeout to avoid blocking forever, drop old frames
+                img_array = self.queue.get(timeout=0.1)
+            except queue.Empty:
+                continue
+                
             if img_array is None:  # None is our signal to exit
                 # Clean up the window only if it was created
                 if window_created:
@@ -50,6 +55,16 @@ class ImageDisplayer(threading.Thread):
                     except:
                         pass  # Ignore if window doesn't exist
                 break
+
+            # Drop old frames in queue to show latest
+            while not self.queue.empty():
+                try:
+                    img_array = self.queue.get_nowait()
+                    if img_array is None:
+                        self.queue.put(None)  # Put back the exit signal
+                        break
+                except queue.Empty:
+                    break
 
             try:
                 frame = np.concatenate(
@@ -111,10 +126,10 @@ class DefaultEnvConfig:
     
     # Reset compliance parameters
     RESET_PARAM: ComplianceParams = ComplianceParams(
-        translational_stiffness=1800,
-        translational_damping=85,
-        rotational_stiffness=120,
-        rotational_damping=8,
+        translational_stiffness=2000,
+        translational_damping=89,
+        rotational_stiffness=150,
+        rotational_damping=7,
     )
     
     # Display and timing
@@ -122,6 +137,10 @@ class DefaultEnvConfig:
     GRIPPER_SLEEP: float = 0.6
     MAX_EPISODE_LENGTH: int = 100
     JOINT_RESET_PERIOD: int = 0
+
+    # Task setup mode - determines gripper behavior
+    # Options: "single-arm-learned-gripper", "single-arm-fixed-gripper", etc.
+    SETUP_MODE: str = "single-arm-fixed-gripper"
 
 
 ##############################################################################
@@ -156,6 +175,7 @@ class HIROLEnv(gym.Env):
         self._REWARD_THRESHOLD = self.config.REWARD_THRESHOLD
         self.max_episode_length = self.config.MAX_EPISODE_LENGTH
         self.display_image = self.config.DISPLAY_IMAGE
+        self.setup_mode = self.config.SETUP_MODE
         
         # Initialize cleanup flags
         self._closing = False
@@ -258,6 +278,12 @@ class HIROLEnv(gym.Env):
                         # Only recover gripper, not the whole robot
                         success = self._recover_gripper()
                         if success:
+                            time.sleep(0.5)
+                            # Close gripper for fixed gripper tasks after recovery
+                            if "fixed-gripper" in self.setup_mode:
+                                print("[Manual Recovery] Closing gripper for fixed gripper task")
+                                self.robot.close_gripper()
+                                time.sleep(0.5)
                             self._update_currpos()
                         print("[Manual Recovery] Recovery attempt completed\n")
                 except Exception as e:
@@ -377,7 +403,7 @@ class HIROLEnv(gym.Env):
             return False
 
     def get_im(self) -> Dict[str, np.ndarray]:
-        """Get images from the realsense cameras."""
+        """Original serial implementation of get_im"""
         images = {}
         display_images = {}
         full_res_images = {}  # New dictionary to store full resolution cropped images

@@ -1,0 +1,32 @@
+{
+    "wrist_1": {
+        "fx": 385.55,
+        "fy": 385.55,
+        "cx": 322.526,
+        "cy": 242.489,
+        "width": 640,
+        "height": 480,
+        "depth_scale": 0.001,
+        "model": "distortion.brown_conrady"
+    },
+    "front": {
+        "fx": 386.619,
+        "fy": 386.619,
+        "cx": 324.881,
+        "cy": 234.11,
+        "width": 640,
+        "height": 480,
+        "depth_scale": 0.001,
+        "model": "distortion.brown_conrady"
+    },
+    "side": {
+        "fx": 383.305,
+        "fy": 383.305,
+        "cx": 320.544,
+        "cy": 243.725,
+        "width": 640,
+        "height": 480,
+        "depth_scale": 0.001,
+        "model": "distortion.brown_conrady"
+    }
+}

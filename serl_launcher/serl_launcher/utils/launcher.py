@@ -13,6 +13,7 @@ from serl_launcher.agents.continuous.sac import SACAgent
 from serl_launcher.agents.continuous.sac_hybrid_single import SACAgentHybridSingleArm
 from serl_launcher.agents.continuous.sac_hybrid_dual import SACAgentHybridDualArm
 from serl_launcher.vision.data_augmentations import batched_random_crop
+from serl_launcher.vision.encoder_factory import create_encoder_from_config, detect_depth_in_observations
 
 ##############################################################################
 
@@ -53,15 +54,33 @@ def make_sac_pixel_agent(
     sample_action,
     image_keys=("image",),
     encoder_type="resnet-pretrained",
+    # 深度相关参数
+    use_depth=None,  # None表示自动检测
+    depth_encoder_kwargs=None,
+    camera_params=None,
     reward_bias=0.0,
     target_entropy=None,
     discount=0.97,
 ):
+    # 自动检测或使用指定的深度配置
+    if use_depth is None:
+        use_depth = detect_depth_in_observations(sample_obs, image_keys)
+
+    # 创建编码器
+    encoder_def = create_encoder_from_config(
+        encoder_type=encoder_type,
+        use_proprio=True,
+        image_keys=image_keys,
+        use_depth=use_depth,
+        depth_encoder_kwargs=depth_encoder_kwargs or {},
+        camera_params=camera_params,
+    )
+
     agent = SACAgent.create_pixels(
         jax.random.PRNGKey(seed),
         sample_obs,
         sample_action,
-        encoder_type=encoder_type,
+        encoder_def=encoder_def,  # 使用自定义编码器
         use_proprio=True,
         image_keys=image_keys,
         policy_kwargs={
@@ -256,4 +275,10 @@ def make_wandb_logger(
         variant={},
         debug=debug,
     )
+    
+    # Define figure4_metrics to use time-based x-axis
+    if not debug:  # Only define metrics when wandb is actually running
+        import wandb
+        wandb.define_metric("figure4_metrics/*", step_metric="training_time_minutes")
+    
     return wandb_logger

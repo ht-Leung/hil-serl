@@ -14,6 +14,7 @@ from hirol_env.envs.wrappers import (
     SpacemouseIntervention,
     MultiCameraBinaryRewardClassifierWrapper,
     KeyboardRewardWrapper,
+    GripperCloseEnv
 )
 from experiments.hirol_unifined.wrapper import GripperPenaltyWrapper, HIROLUnifiedEnv
 from hirol_env.envs.relative_env import RelativeFrame
@@ -32,9 +33,9 @@ class EnvConfig(DefaultEnvConfig):
     
     # Camera configuration  
     REALSENSE_CAMERAS = {
-        "wrist_1": {"serial_number": "332322073603"},
-        "front": {"serial_number": "244222075350"},
-        "side": {"serial_number": "317422071787"},
+        "wrist_1": {"serial_number": "332322073603", "fps": 30, "exposure": 20000},
+        "front": {"serial_number": "244222075350", "fps": 30, "exposure": 20000},
+        "side": {"serial_number": "243122071795", "fps": 30, "exposure": 20000},
     }
     IMAGE_CROP = {
         "wrist_1": lambda img: img[:,:],
@@ -47,7 +48,7 @@ class EnvConfig(DefaultEnvConfig):
     # TARGET_POSE = np.array([0.5, 0.1, 0.3, -np.pi, 0, 0])
     
     # Reset pose - slightly offset from target
-    RESET_POSE = np.array([0.5, 0.1, 0.32, -np.pi, 0, 0])
+    RESET_POSE = np.array([0.5, 0.1, 0.45, -np.pi, 0, 0])
     
     # Reward threshold - 2cm for position, 0.1 rad for orientation
     REWARD_THRESHOLD = np.array([0.02, 0.02, 0.02, 0.1, 0.1, 0.1])
@@ -56,7 +57,7 @@ class EnvConfig(DefaultEnvConfig):
     # Optimized for SpaceMouse control (max output ~0.26 after scaling by 350)
     # Position: 0.26 * 0.02 = 5.2mm per frame, at 10Hz = 52mm/s max velocity
     # Rotation: 0.26 * 0.25 = 0.065 rad = 3.7 degrees per frame
-    ACTION_SCALE = np.array([0.02, 0.06, 1])  # Increased rotation scale for better responsiveness
+    ACTION_SCALE = np.array([0.02, 0.06, 1])   #  gripper 0 or 1 ;Increased rotation scale for better responsiveness
     
 
       
@@ -66,8 +67,8 @@ class EnvConfig(DefaultEnvConfig):
     RANDOM_RZ_RANGE = 0.1
     
     # Workspace limits
-    ABS_POSE_LIMIT_HIGH = np.array([0.7, 0.24, 0.45, np.pi, 0.5, +0.3*np.pi])
-    ABS_POSE_LIMIT_LOW = np.array([0.30, 0, 0.22, np.pi, -0.5, -0.3*np.pi])
+    ABS_POSE_LIMIT_HIGH = np.array([0.7, 0.24, 0.55, np.pi, 0.5, +0.3*np.pi])
+    ABS_POSE_LIMIT_LOW = np.array([0.30, 0, 0.34, np.pi, -0.5, -0.3*np.pi])
     
     # Display
     DISPLAY_IMAGE = True
@@ -82,7 +83,7 @@ class TrainConfig(DefaultTrainingConfig):
     # Image and proprioception keys
     image_keys = ["side", "wrist_1","front"]
     classifier_keys = [
-                        # "side" ,
+                        "side" ,
                        "wrist_1",
                        "front"
                        ] 
@@ -131,7 +132,7 @@ class TrainConfig(DefaultTrainingConfig):
             save_video=save_video, 
             config=EnvConfig()
         )
-        
+        # env = GripperCloseEnv(env)
         # Add spacemouse intervention for human demonstrations
         if not fake_env:
             env = SpacemouseIntervention(env, gripper_enabled=True)
@@ -164,7 +165,7 @@ class TrainConfig(DefaultTrainingConfig):
                     logit = logit.squeeze()
                     if logit.shape:  # Still has dimensions
                         logit = logit[0]
-                return int(sigmoid(logit) > 0.7) # 0.65/0.75
+                return int(sigmoid(logit) > 0.85)#.65/0.75
 
 
 

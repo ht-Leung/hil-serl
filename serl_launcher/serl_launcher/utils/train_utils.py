@@ -150,15 +150,29 @@ def load_resnet10_params(agent, image_keys=("image",), public=True):
     new_params = agent.state.params
 
     for image_key in image_keys:
-        new_encoder_params = new_params["modules_actor"]["encoder"][
-            f"encoder_{image_key}"
-        ]
+        # 检查是否使用多模态编码器（rgb_encoder字典结构）
+        if "rgb_encoder" in new_params["modules_actor"]["encoder"]:
+            # 多模态编码器路径 - RGB编码器在rgb_encoder字典中
+            new_encoder_params = new_params["modules_actor"]["encoder"]["rgb_encoder"][image_key]
+        elif f"encoder_{image_key}" in new_params["modules_actor"]["encoder"]:
+            # 标准编码器路径
+            new_encoder_params = new_params["modules_actor"]["encoder"][
+                f"encoder_{image_key}"
+            ]
+        else:
+            # 尝试直接访问image_key（某些特殊情况）
+            try:
+                new_encoder_params = new_params["modules_actor"]["encoder"][image_key]
+            except KeyError:
+                print(f"Warning: Could not find encoder for {image_key}, skipping ResNet-10 weight loading")
+                continue
+
         if "pretrained_encoder" in new_encoder_params:
             new_encoder_params = new_encoder_params["pretrained_encoder"]
         for k in new_encoder_params:
             if k in encoder_params:
                 new_encoder_params[k] = encoder_params[k]
-                print(f"replaced {k} in pretrained_encoder")
+                print(f"replaced {k} in pretrained_encoder for {image_key}")
 
     agent = agent.replace(state=agent.state.replace(params=new_params))
     return agent
