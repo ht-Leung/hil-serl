@@ -156,16 +156,30 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng):
         intervention_count = 0
         intervention_steps = 0
         
-        # Metrics tracking for Figure 4
+        # Metrics tracking for Figure 4 using EMA (Exponential Moving Average)
         training_start_time = time.time()  # Track wall-clock time from training start
         episode_count = 0
-        success_history = []  # Store last 20 episodes
-        autonomous_success_history = []  # Store last 20 episodes for autonomous success
-        assisted_success_history = []  # Store last 20 episodes for assisted success
-        cycle_time_history = []  # Store last 20 episodes - all episodes
-        autonomous_cycle_time_history = []  # Store last 20 episodes - autonomous only
-        assisted_cycle_time_history = []  # Store last 20 episodes - with intervention  
-        intervention_rate_history = []  # Store last 20 episodes
+
+        # EMA parameters - alpha = 2/(N+1) where N is window size
+        ema_alpha = 2.0 / 21.0  # For equivalent of 20-episode window
+
+        # Initialize EMA values
+        ema_success_rate = 0.0
+        ema_autonomous_success_rate = 0.0
+        ema_assisted_success_rate = 0.0
+        ema_cycle_time = 0.0
+        ema_autonomous_cycle_time = 0.0
+        ema_assisted_cycle_time = 0.0
+        ema_intervention_rate = 0.0
+
+        # Keep some history for initialization (use first few episodes to bootstrap)
+        bootstrap_episodes = 5
+        success_history = []  # Only for bootstrap
+        autonomous_success_history = []
+        assisted_success_history = []
+        cycle_time_history = []
+        intervention_rate_history = []
+
         episode_start_time = time.time()
         episode_steps = 0
 
@@ -236,40 +250,60 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng):
                     autonomous_success = success and (intervention_steps == 0)  # Completely autonomous success
                     assisted_success = success and (intervention_steps > 0)      # Success with human assistance
                     
-                    # Update history (keep last 20 episodes)
-                    success_history.append(float(success))
-                    autonomous_success_history.append(float(autonomous_success))
-                    assisted_success_history.append(float(assisted_success))
-                    cycle_time_history.append(cycle_time)
-                    intervention_rate_history.append(intervention_rate)
-                    
-                    # Record cycle time by intervention type
-                    if intervention_steps == 0:
-                        autonomous_cycle_time_history.append(cycle_time)
+                    # Update EMA or bootstrap with simple average
+                    if episode_count <= bootstrap_episodes:
+                        # During bootstrap, collect history for initial average
+                        success_history.append(float(success))
+                        autonomous_success_history.append(float(autonomous_success))
+                        assisted_success_history.append(float(assisted_success))
+                        cycle_time_history.append(cycle_time)
+                        intervention_rate_history.append(intervention_rate)
+
+                        # Use simple average during bootstrap
+                        ema_success_rate = np.mean(success_history)
+                        ema_autonomous_success_rate = np.mean(autonomous_success_history)
+                        ema_assisted_success_rate = np.mean(assisted_success_history)
+                        ema_cycle_time = np.mean(cycle_time_history)
+                        ema_intervention_rate = np.mean(intervention_rate_history)
+
+                        # For cycle times, only update if we have data
+                        if intervention_steps == 0:
+                            # Autonomous episode
+                            if episode_count == 1:
+                                ema_autonomous_cycle_time = cycle_time
+                            else:
+                                n_auto = sum(1 for h in intervention_rate_history if h == 0)
+                                if n_auto > 0:
+                                    ema_autonomous_cycle_time = sum(cycle_time_history[i] for i, h in enumerate(intervention_rate_history) if h == 0) / n_auto
+                        else:
+                            # Assisted episode
+                            if episode_count == 1:
+                                ema_assisted_cycle_time = cycle_time
+                            else:
+                                n_assist = sum(1 for h in intervention_rate_history if h > 0)
+                                if n_assist > 0:
+                                    ema_assisted_cycle_time = sum(cycle_time_history[i] for i, h in enumerate(intervention_rate_history) if h > 0) / n_assist
                     else:
-                        assisted_cycle_time_history.append(cycle_time)
-                    
-                    # Maintain history size (keep last 20 episodes)
-                    if len(success_history) > 20:
-                        success_history.pop(0)
-                        autonomous_success_history.pop(0)
-                        assisted_success_history.pop(0)
-                        cycle_time_history.pop(0)
-                        intervention_rate_history.pop(0)
-                    
-                    if len(autonomous_cycle_time_history) > 20:
-                        autonomous_cycle_time_history.pop(0)
-                    if len(assisted_cycle_time_history) > 20:
-                        assisted_cycle_time_history.pop(0)
-                    
-                    # Calculate running averages
-                    avg_success_rate = np.mean(success_history) if success_history else 0.0
-                    avg_autonomous_success_rate = np.mean(autonomous_success_history) if autonomous_success_history else 0.0
-                    avg_assisted_success_rate = np.mean(assisted_success_history) if assisted_success_history else 0.0
-                    avg_cycle_time = np.mean(cycle_time_history) if cycle_time_history else 0.0
-                    avg_autonomous_cycle_time = np.mean(autonomous_cycle_time_history) if autonomous_cycle_time_history else 0.0
-                    avg_assisted_cycle_time = np.mean(assisted_cycle_time_history) if assisted_cycle_time_history else 0.0
-                    avg_intervention_rate = np.mean(intervention_rate_history) if intervention_rate_history else 0.0
+                        # Use EMA after bootstrap period
+                        ema_success_rate = ema_alpha * float(success) + (1 - ema_alpha) * ema_success_rate
+                        ema_autonomous_success_rate = ema_alpha * float(autonomous_success) + (1 - ema_alpha) * ema_autonomous_success_rate
+                        ema_assisted_success_rate = ema_alpha * float(assisted_success) + (1 - ema_alpha) * ema_assisted_success_rate
+                        ema_cycle_time = ema_alpha * cycle_time + (1 - ema_alpha) * ema_cycle_time
+                        ema_intervention_rate = ema_alpha * intervention_rate + (1 - ema_alpha) * ema_intervention_rate
+
+                        # Update cycle time EMAs conditionally
+                        if intervention_steps == 0:
+                            # Autonomous episode - update autonomous cycle time EMA
+                            if ema_autonomous_cycle_time == 0:
+                                ema_autonomous_cycle_time = cycle_time  # First autonomous episode after bootstrap
+                            else:
+                                ema_autonomous_cycle_time = ema_alpha * cycle_time + (1 - ema_alpha) * ema_autonomous_cycle_time
+                        else:
+                            # Assisted episode - update assisted cycle time EMA
+                            if ema_assisted_cycle_time == 0:
+                                ema_assisted_cycle_time = cycle_time  # First assisted episode after bootstrap
+                            else:
+                                ema_assisted_cycle_time = ema_alpha * cycle_time + (1 - ema_alpha) * ema_assisted_cycle_time
                     
                     # Calculate training time in minutes
                     training_time_minutes = (time.time() - training_start_time) / 60.0
@@ -283,22 +317,22 @@ def actor(agent, data_store, intvn_data_store, env, sampling_rng):
                     info["episode"]["autonomous_success"] = float(autonomous_success)
                     info["episode"]["assisted_success"] = float(assisted_success)
                     
-                    # Add Figure 4 metrics with training time
+                    # Add Figure 4 metrics with training time (using EMA smoothing)
                     info["figure4_metrics"] = {
-                        "success_rate_avg20": avg_success_rate,
-                        "autonomous_success_rate_avg20": avg_autonomous_success_rate,
-                        "assisted_success_rate_avg20": avg_assisted_success_rate,
-                        "cycle_time_avg20": avg_cycle_time,
-                        "autonomous_cycle_time_avg20": avg_autonomous_cycle_time,
-                        "assisted_cycle_time_avg20": avg_assisted_cycle_time,
-                        "intervention_rate_avg20": avg_intervention_rate,
+                        "success_rate_ema": ema_success_rate,
+                        "autonomous_success_rate_ema": ema_autonomous_success_rate,
+                        "assisted_success_rate_ema": ema_assisted_success_rate,
+                        "cycle_time_ema": ema_cycle_time,
+                        "autonomous_cycle_time_ema": ema_autonomous_cycle_time,
+                        "assisted_cycle_time_ema": ema_assisted_cycle_time,
+                        "intervention_rate_ema": ema_intervention_rate,
                         "training_time_minutes": training_time_minutes,
                         "episode_count": episode_count,
                     }
-                    
+
                     stats = {"environment": info}  # send stats to the learner to log
                     client.request("send-stats", stats)
-                    pbar.set_description(f"return: {running_return:.1f} | auto: {avg_autonomous_success_rate:.0%} | total: {avg_success_rate:.0%} | int: {avg_intervention_rate:.0%} | t: {training_time_minutes:.1f}m")
+                    pbar.set_description(f"return: {running_return:.1f} | auto: {ema_autonomous_success_rate:.0%} | total: {ema_success_rate:.0%} | int: {ema_intervention_rate:.0%} | t: {training_time_minutes:.1f}m")
                     
                     # Reset for next episode
                     running_return = 0.0
@@ -642,6 +676,13 @@ def main(_):
     if FLAGS.learner:
         sampling_rng = jax.device_put(sampling_rng, device=sharding.replicate())
         replay_buffer, wandb_logger = create_replay_buffer_and_wandb_logger()
+
+        # Configure wandb metrics to use training_time_minutes as x-axis for Figure 4
+        if wandb_logger is not None:
+            import wandb
+            wandb.define_metric("training_time_minutes")
+            wandb.define_metric("figure4_metrics/*", step_metric="training_time_minutes")
+
         demo_buffer = MemoryEfficientReplayBufferDataStore(
             env.observation_space,
             env.action_space,

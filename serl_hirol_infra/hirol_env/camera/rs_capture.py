@@ -16,7 +16,7 @@ class RSCapture:
         except:
             pass
 
-    def __init__(self, name, serial_number, dim=(640, 480), fps=30, depth=False, exposure=40000):
+    def __init__(self, name, serial_number, dim=(640, 480), fps=15, depth=False, exposure=None):
         self.name = name
         self.serial_number = serial_number
         self.depth = depth
@@ -50,8 +50,9 @@ class RSCapture:
                     time.sleep(2)
                 else:
                     raise
-        self.s = self.profile.get_device().query_sensors()[0]
-        self.s.set_option(rs.option.exposure, exposure)
+        self.s = self.profile.get_device().query_sensors()[1] # fix index for color sensor
+        if exposure is not None:
+            self.s.set_option(rs.option.exposure, exposure)
 
         # Create an align object
         # rs.align allows us to perform alignment of depth frames to others frames

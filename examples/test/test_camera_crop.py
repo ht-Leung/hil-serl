@@ -17,8 +17,8 @@ CAMERAS = {
 # Initialize crop parameters (y_start, y_end, x_start, x_end)
 CROP_PARAMS = {
     "wrist_1": [0, 480, 0, 640],  # Full image initially
-    "front": lambda img: img[0:480, 90:640],
-    "side": lambda img: img[40:410, 250:640],
+    "front": [0, 480, 0, 640],    # Extracted from lambda img: img[0:480, 90:640]
+    "side": [0, 6400, 0, 640],   # Extracted from lambda img: img[40:410, 250:640]
 }
 
 # Adjustment step size

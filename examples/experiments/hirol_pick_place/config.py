@@ -14,6 +14,7 @@ from hirol_env.envs.wrappers import (
     SpacemouseIntervention,
     MultiCameraBinaryRewardClassifierWrapper,
     KeyboardRewardWrapper,
+    TwoStageKeyboardRewardWrapper,
     GripperCloseEnv
 )
 from experiments.hirol_pick_place.wrapper import GripperPenaltyWrapper, HIROLPickPlaceEnv
@@ -39,16 +40,17 @@ class EnvConfig(DefaultEnvConfig):
     }
     IMAGE_CROP = {
         "wrist_1": lambda img: img[:,:],
-        "front": lambda img: img[0:480, 90:640],
-        "side": lambda img: img[40:410, 250:640],
-        
+        "front": lambda img: img[:,:],
+        "side": lambda img: img[:,:],
+        # "front": lambda img: img[0:480, 90:640],
+        # "side": lambda img: img[40:410, 250:640],        
     }
     
     # Target pose for reaching (x, y, z, roll, pitch, yaw)
     # TARGET_POSE = np.array([0.5, 0.1, 0.3, -np.pi, 0, 0])
     
     # Reset pose - slightly offset from target
-    RESET_POSE = np.array([0.5, 0.1, 0.3, -np.pi, 0, 0])
+    RESET_POSE = np.array([0.55, 0.1, 0.3, -np.pi, 0, 0])
     
     # Reward threshold - 2cm for position, 0.1 rad for orientation
     # REWARD_THRESHOLD = np.array([0.02, 0.02, 0.02, 0.1, 0.1, 0.1])
@@ -67,18 +69,18 @@ class EnvConfig(DefaultEnvConfig):
     RANDOM_RZ_RANGE = 0.1
     
     # Workspace limits
-    ABS_POSE_LIMIT_HIGH = np.array([0.7, 0.24, 0.55, np.pi, 0.1, +0.3*np.pi])
-    ABS_POSE_LIMIT_LOW = np.array([0.30, 0, 0.25, np.pi, -0.1, -0.3*np.pi])
+    ABS_POSE_LIMIT_HIGH = np.array([0.7, 0.24, 0.5, np.pi+np.pi/12, np.pi/12, 0])
+    ABS_POSE_LIMIT_LOW = np.array([0.4, 0, 0.25, np.pi-np.pi/12, -np.pi/12, 0])
 
     # Display
     DISPLAY_IMAGE = True
-    GRIPPER_SLEEP = 0.0
+    GRIPPER_SLEEP = 0.5  # 0.5 seconds delay after gripper actions
     MAX_EPISODE_LENGTH = 120
     # JOINT_RESET_PERIOD = 100  # Reset joints every 20 episodes
 
     # Task setup mode (will be set from training config)
     SETUP_MODE = None  # Will be set by training config
-
+    GRIPPER_INIT_STATE = "open"  # Change this to control initial gripper state
 
 class TrainConfig(DefaultTrainingConfig):
     """Training configuration for HIROL Pick Place task"""
@@ -147,13 +149,15 @@ class TrainConfig(DefaultTrainingConfig):
         
         # Add wrappers
         env = Quat2EulerWrapper(env)
-        env = GripperPenaltyWrapper(env, penalty=-0.02)  # Add gripper penalty tracking
+        env = GripperPenaltyWrapper(env, penalty=-0.02,gripper_init_mode='open')  # Add gripper penalty tracking
         env = SERLObsWrapper(env, proprio_keys=self.proprio_keys)
         env = ChunkingWrapper(env, obs_horizon=1, act_exec_horizon=None)
         
-        # Add keyboard reward if requested (press 's' to give reward)
+        # Add two-stage keyboard reward if requested (press 's' at grasp and place)
         if classifier:
-            env = KeyboardRewardWrapper(env)
+            # Use two-stage reward with lower grasp reward to encourage completion
+            # env = KeyboardRewardWrapper(env)
+            env = TwoStageKeyboardRewardWrapper(env, grasp_reward=0.5, place_reward=1.0, verbose=False)
             
             # # 如果用视觉分类器作为奖励函数，可以使用以下代码
             # classifier = load_classifier_func(

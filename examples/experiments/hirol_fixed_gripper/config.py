@@ -34,13 +34,18 @@ class EnvConfig(DefaultEnvConfig):
     # Camera configuration  
     REALSENSE_CAMERAS = {
         "wrist_1": {"serial_number": "332322073603"},
-        "front": {"serial_number": "244222075350"},
-        "side": {"serial_number": "243122071795"},
+        "front": {"serial_number": "244222075350","exposure": 80},
+        "side": {"serial_number": "243122071795","exposure": 80},
+        # "wrist_1": {"serial_number": "332322073603"},
+        # "front": {"serial_number": "244222075350"},
+        # "side": {"serial_number": "243122071795"},
+        
+        
     }
     IMAGE_CROP = {
         "wrist_1": lambda img: img[:,:],
         "front": lambda img: img[:, :],
-        "side": lambda img: img[0:480, 100:640],
+        "side": lambda img: img[:, :],
         
     }
     
@@ -48,8 +53,9 @@ class EnvConfig(DefaultEnvConfig):
     # TARGET_POSE = np.array([0.5, 0.1, 0.3, -np.pi, 0, 0])
     
     # Reset pose - slightly offset from target
-    RESET_POSE = np.array([0.5, 0.1, 0.45, -np.pi, 0, 0])
-    
+    # RESET_POSE = np.array([0.5, 0.1, 0.45, -np.pi, 0, 0])
+    RESET_POSE = np.array([0.55, 0.1, 0.3, -np.pi, 0, 0])  
+      
     # Reward threshold - 2cm for position, 0.1 rad for orientation
     REWARD_THRESHOLD = np.array([0.02, 0.02, 0.02, 0.1, 0.1, 0.1])
     
@@ -57,18 +63,21 @@ class EnvConfig(DefaultEnvConfig):
     # Optimized for SpaceMouse control (max output ~0.26 after scaling by 350)
     # Position: 0.26 * 0.02 = 5.2mm per frame, at 10Hz = 52mm/s max velocity
     # Rotation: 0.26 * 0.25 = 0.065 rad = 3.7 degrees per frame
-    ACTION_SCALE = np.array([0.02, 0.06, 0])   #  gripper 0 or 1 ;Increased rotation scale for better responsiveness
+    ACTION_SCALE = np.array([0.02, 0.04, 0])   #  gripper 0 or 1 ;Increased rotation scale for better responsiveness
     
 
       
     # Enable random reset for diversity
-    RANDOM_RESET = False
-    RANDOM_XY_RANGE = 0.05
-    RANDOM_RZ_RANGE = 0.1
+    RANDOM_RESET = True
+    RANDOM_XY_RANGE = 0.02
+    # RANDOM_RZ_RANGE = 0.1
+    RANDOM_RZ_RANGE = 0.0
     
     # Workspace limits
-    ABS_POSE_LIMIT_HIGH = np.array([0.7, 0.24, 0.55, np.pi, 0., +0.3*np.pi])
-    ABS_POSE_LIMIT_LOW = np.array([0.4, 0, 0.34, np.pi, -0., -0.3*np.pi])
+    # ABS_POSE_LIMIT_HIGH = np.array([0.7, 0.24, 0.55, np.pi+np.pi/12, np.pi/12, 0])
+    # ABS_POSE_LIMIT_LOW = np.array([0.4, 0, 0.34, np.pi-np.pi/12, -np.pi/12, 0])
+    ABS_POSE_LIMIT_HIGH = np.array([0.65, 0.24, 0.35, np.pi+np.pi/12, np.pi/12, np.pi/12])
+    ABS_POSE_LIMIT_LOW = np.array([0.45, 0, 0.21, np.pi-np.pi/12, -np.pi/12, -np.pi/12])
     
     # Display
     DISPLAY_IMAGE = True
@@ -94,7 +103,7 @@ class TrainConfig(DefaultTrainingConfig):
     proprio_keys = ["tcp_pose", "tcp_vel", "tcp_force", "tcp_torque", "gripper_pose"]
     
     # Training parameters
-    checkpoint_period = 5000
+    checkpoint_period = 2000
     cta_ratio = 2
     random_steps = 0
     discount = 0.97

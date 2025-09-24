@@ -39,18 +39,25 @@ class ImageDisplayer(threading.Thread):
 
     def run(self):
         window_created = False
+        full_window_created = False
         while True:
             try:
                 # Use timeout to avoid blocking forever, drop old frames
                 img_array = self.queue.get(timeout=0.1)
             except queue.Empty:
                 continue
-                
+
             if img_array is None:  # None is our signal to exit
-                # Clean up the window only if it was created
+                # Clean up the windows only if they were created
                 if window_created:
                     try:
                         cv2.destroyWindow(self.name)
+                        cv2.waitKey(1)
+                    except:
+                        pass  # Ignore if window doesn't exist
+                if full_window_created:
+                    try:
+                        cv2.destroyWindow(self.name + "_full")
                         cv2.waitKey(1)
                     except:
                         pass  # Ignore if window doesn't exist
@@ -67,13 +74,23 @@ class ImageDisplayer(threading.Thread):
                     break
 
             try:
-                frame = np.concatenate(
-                    [cv2.resize(v, (128, 128)) for k, v in img_array.items() if "full" not in k], axis=1
-                )
+                # Display low resolution version
+                low_res_images = [(k, v) for k, v in img_array.items() if "full" not in k]
+                if low_res_images:
+                    frame_low = np.concatenate(
+                        [cv2.resize(v, (128, 128)) for k, v in low_res_images], axis=1
+                    )
+                    cv2.imshow(self.name, frame_low)
+                    window_created = True
 
-                cv2.imshow(self.name, frame)
+                # Display full resolution version
+                full_res_images = [v for k, v in img_array.items() if "full" in k]
+                if full_res_images:
+                    frame_full = np.concatenate(full_res_images, axis=1)
+                    cv2.imshow(self.name + "_full", frame_full)
+                    full_window_created = True
+
                 cv2.waitKey(1)
-                window_created = True  # Mark that window has been created
             except Exception as e:
                 # Ignore display errors but continue running
                 pass
@@ -556,9 +573,19 @@ class HIROLEnv(gym.Env):
         # Move to reset position using smooth trajectory
         up_pose = self.currpos.copy()
         up_pose[:3] += np.array([0, 0, 0.1])  # Move up by 10cm
+        
+        # Move in z direction first
         self.interpolate_move(up_pose, timeout=1.0)
         time.sleep(0.1)
-        self.interpolate_move(reset_pose, timeout=3.0)
+        
+        #optional: move in an "L" shape to avoid obstacles
+        # side_pose = up_pose.copy()
+        # side_pose[:3] +=np.array([0,-0.1,0])  
+        # self.interpolate_move(side_pose, timeout=1.0)
+        
+        # Move down to reset height
+        time.sleep(0.1)
+        self.interpolate_move(reset_pose, timeout=2.0)
         
         # Change back to compliance mode
         if self.robot is not None:
@@ -586,6 +613,9 @@ class HIROLEnv(gym.Env):
             self.cycle_count = 0
             joint_reset = True
 
+        # Pre-enter hook for wrapper to perform gripper operations before waiting for Enter
+        if hasattr(self, '_pre_enter_hook') and callable(self._pre_enter_hook):
+            self._pre_enter_hook()
         
         self._recover()
         self.go_to_reset(joint_reset=joint_reset)
@@ -596,8 +626,8 @@ class HIROLEnv(gym.Env):
         
         # Hook for wrapper to perform gripper operations before waiting for Enter
         # This maintains decoupling - base env doesn't know about gripper specifics
-        if hasattr(self, '_pre_enter_hook') and callable(self._pre_enter_hook):
-            self._pre_enter_hook()
+        # if hasattr(self, '_pre_enter_hook') and callable(self._pre_enter_hook):
+        #     self._pre_enter_hook()
         
         # Initialize ideal pose to actual reset pose
         self.ideal_pose = self.currpos.copy()
@@ -728,14 +758,14 @@ class HIROLEnv(gym.Env):
                 print(f"[Gripper] Closing gripper (action={pos:.2f}, current={current_gripper:.2f})")
                 self.robot.close_gripper()
                 self.last_gripper_act = time.time()
-                # time.sleep(self.gripper_sleep)
+                time.sleep(self.gripper_sleep)
                 # Force update gripper state after command
                 self._update_currpos()
             elif (pos >= 0.5) and (current_gripper < 0.65) and (time.time() - self.last_gripper_act > self.gripper_sleep):  # open gripper
                 print(f"[Gripper] Opening gripper (action={pos:.2f}, current={current_gripper:.2f})")
                 self.robot.open_gripper()
                 self.last_gripper_act = time.time()
-                # time.sleep(self.gripper_sleep)
+                time.sleep(self.gripper_sleep)
                 # Force update gripper state after command  
                 self._update_currpos()
             # Debug print to see what's happening (commented out to reduce spam)

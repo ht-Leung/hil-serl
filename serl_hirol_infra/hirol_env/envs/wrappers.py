@@ -178,6 +178,85 @@ class KeyboardRewardWrapper(gym.Wrapper):
         super().close()
 
 
+class TwoStageKeyboardRewardWrapper(gym.Wrapper):
+    """
+    Two-stage manual reward for pick-and-place tasks.
+    Press 's' once for grasp reward, again for place reward.
+    """
+
+    def __init__(self, env: Env, grasp_reward=0.3, place_reward=1.0, verbose=False):
+        super().__init__(env)
+        self.grasp_reward = grasp_reward
+        self.place_reward = place_reward
+        self.verbose = verbose
+
+        # State management
+        self.stage = "SEARCHING"  # SEARCHING -> GRASPED -> PLACED
+        self.pending_reward = 0.0
+        self.lock = threading.Lock()
+
+        # Start keyboard listener
+        self.listener = keyboard.Listener(on_press=self._on_press)
+        self.listener.start()
+        if verbose:
+            print(f"[TwoStageReward] Grasp: {grasp_reward}, Place: {place_reward}. Press 's' at each stage.")
+
+    def _on_press(self, key):
+        """Handle keyboard press for two-stage rewards"""
+        try:
+            if hasattr(key, 'char') and key.char == 's':
+                with self.lock:
+                    if self.stage == "SEARCHING":
+                        self.pending_reward = self.grasp_reward
+                        self.stage = "GRASPED"
+                        if self.verbose:
+                            print(f"[Grasp] +{self.grasp_reward}")
+
+                    elif self.stage == "GRASPED":
+                        self.pending_reward = self.place_reward
+                        self.stage = "PLACED"
+                        if self.verbose:
+                            print(f"[Place] +{self.place_reward}")
+        except AttributeError:
+            pass
+
+    def step(self, action):
+        obs, rew, done, truncated, info = self.env.step(action)
+
+        # Apply pending reward
+        with self.lock:
+            if self.pending_reward > 0:
+                rew = self.pending_reward
+                info['reward_stage'] = self.stage
+                info['grasp_success'] = (self.stage in ["GRASPED", "PLACED"])
+                info['place_success'] = (self.stage == "PLACED")
+
+                # End episode only after place
+                if self.stage == "PLACED":
+                    done = True
+                    info['succeed'] = True
+
+                self.pending_reward = 0.0
+            else:
+                rew = 0.0
+                info['succeed'] = False
+
+        return obs, rew, done, truncated, info
+
+    def reset(self, **kwargs):
+        obs, info = self.env.reset(**kwargs)
+        with self.lock:
+            self.stage = "SEARCHING"
+            self.pending_reward = 0.0
+        info['succeed'] = False
+        return obs, info
+
+    def close(self):
+        """Clean up keyboard listener"""
+        self.listener.stop()
+        super().close()
+
+
 class Quat2EulerWrapper(gym.ObservationWrapper):
     """
     Convert the quaternion representation of the tcp pose to euler angles
