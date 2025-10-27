@@ -18,8 +18,8 @@ def construct_adjoint_matrix(tcp_pose):
     )
     adjoint_matrix = np.zeros((6, 6))
     adjoint_matrix[:3, :3] = rotation
+    adjoint_matrix[:3, 3:] = skew_matrix @ rotation  # linear components precede angular
     adjoint_matrix[3:, 3:] = rotation
-    adjoint_matrix[3:, :3] = skew_matrix @ rotation
     return adjoint_matrix
 
 
@@ -38,8 +38,13 @@ def construct_homogeneous_matrix(tcp_pose):
 
 def construct_adjoint_matrix_from_euler(tcp_pose):
     """
-    Construct the adjoint matrix for a spatial velocity vector
-    :args: tcp_pose: (x, y, z, qx, qy, qz, qw)
+    Construct the adjoint matrix for a spatial velocity vector (twist ordered as [v, ω]).
+    
+    Args:
+        tcp_pose (array-like): (x, y, z, roll, pitch, yaw)
+            Pose of the TCP, where rotation is represented by Euler angles (in radians, 'xyz' order).
+    Returns:
+        np.ndarray: (6, 6) adjoint transformation matrix.
     """
     rotation = R.from_euler("xyz", tcp_pose[3:]).as_matrix()
     translation = np.array(tcp_pose[:3])
@@ -52,8 +57,8 @@ def construct_adjoint_matrix_from_euler(tcp_pose):
     )
     adjoint_matrix = np.zeros((6, 6))
     adjoint_matrix[:3, :3] = rotation
+    adjoint_matrix[:3, 3:] = skew_matrix @ rotation  # linear components precede angular
     adjoint_matrix[3:, 3:] = rotation
-    adjoint_matrix[3:, :3] = skew_matrix @ rotation
     return adjoint_matrix
 
 
